@@ -73,22 +73,35 @@ export function Modal({
   wide?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Callers (e.g. Combobox) pass an inline onClose that gets a new identity on
+  // every keystroke inside the dialog. A ref keeps this effect from depending
+  // on that identity — otherwise it re-runs per keystroke and re-focuses the
+  // dialog frame, yanking focus off whatever input the user is typing into.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
     // Keep the page behind the sheet from scrolling on iOS.
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    panelRef.current?.focus();
+    // Only take focus ourselves when nothing inside the dialog already has it.
+    // An autoFocus search input (Combobox) grabs focus synchronously when the
+    // DOM is inserted, before this effect runs; focusing the panel afterwards
+    // used to steal it straight back, closing the on-screen keyboard before
+    // the first keystroke could land.
+    if (!panelRef.current?.contains(document.activeElement)) {
+      panelRef.current?.focus();
+    }
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previous;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
