@@ -3,6 +3,13 @@ import { unzip, zip, strFromU8, strToU8, type Zippable } from 'fflate';
 import { ENTITY_TABLES, db, type EntityTableName } from './db';
 import { invalidatePhotoUrl } from './photos';
 import type { AppSetting, BaseEntity, ID, Photo } from './types';
+import {
+  DATA_VERSION,
+  DATA_VERSION_KEY,
+  PRE_MIGRATION_SNAPSHOT_KEY,
+  isFromFuture,
+  migrateTables,
+} from './migrations';
 
 /**
  * Backup treats every entity table alike, but each has its own row type, so
@@ -19,6 +26,11 @@ const tableFor = (name: EntityTableName): AnyEntityTable =>
  * their original compressed bytes.
  */
 
+/**
+ * Version of the zip *container* — the file layout and manifest shape. Separate
+ * from `DATA_VERSION`, which versions the rows inside. A release can change one
+ * without touching the other.
+ */
 export const BACKUP_VERSION = 1;
 
 interface PhotoMeta extends Omit<Photo, 'blob' | 'thumbBlob'> {
@@ -29,6 +41,9 @@ interface PhotoMeta extends Omit<Photo, 'blob' | 'thumbBlob'> {
 
 interface BackupManifest {
   version: number;
+  /** Row-format version, so an old backup can be migrated on import. Absent in
+   *  the very first release's files, which were all format v1. */
+  dataVersion?: number;
   exportedAt: string;
   app: string;
   counts: Record<string, number>;
@@ -49,15 +64,20 @@ function unzipAsync(data: Uint8Array): Promise<Record<string, Uint8Array>> {
   });
 }
 
-export async function exportBackup(): Promise<{ blob: Blob; filename: string }> {
-  const tables = {} as Record<EntityTableName, BaseEntity[]>;
-  for (const name of ENTITY_TABLES) {
-    tables[name] = await tableFor(name).toArray();
-  }
-
-  const settings = await db.settings.toArray();
-  const photos = await db.photos.toArray();
-
+/**
+ * Package a set of rows plus the photos they reference into a backup zip.
+ *
+ * Split out from `exportBackup` so the pre-migration snapshot can be handed to
+ * the user as an ordinary, importable backup file rather than a special format
+ * only this app version understands.
+ */
+export async function buildBackupZip(
+  tables: Record<EntityTableName, BaseEntity[]>,
+  settings: AppSetting[],
+  photos: Photo[],
+  dataVersion: number,
+  filenameSuffix = '',
+): Promise<{ blob: Blob; filename: string }> {
   const files: Zippable = {};
   const photoMeta: PhotoMeta[] = [];
 
@@ -75,10 +95,11 @@ export async function exportBackup(): Promise<{ blob: Blob; filename: string }> 
 
   const manifest: BackupManifest = {
     version: BACKUP_VERSION,
+    dataVersion,
     exportedAt: new Date().toISOString(),
     app: '小卡櫃',
     counts: {
-      cards: tables.cards.length,
+      cards: tables.cards?.length ?? 0,
       photos: photoMeta.length,
     },
     tables,
@@ -96,8 +117,21 @@ export async function exportBackup(): Promise<{ blob: Blob; filename: string }> 
     // ASCII on purpose. Chromium discards an all-CJK `download` attribute and
     // saves the file as "download" with no extension, and non-ASCII names also
     // travel badly over AirDrop and cloud drives.
-    filename: `pocabox-backup-${stamp}.zip`,
+    filename: `pocabox-backup-${stamp}${filenameSuffix}.zip`,
   };
+}
+
+export async function exportBackup(): Promise<{ blob: Blob; filename: string }> {
+  const tables = {} as Record<EntityTableName, BaseEntity[]>;
+  for (const name of ENTITY_TABLES) {
+    tables[name] = await tableFor(name).toArray();
+  }
+  return buildBackupZip(
+    tables,
+    await db.settings.toArray(),
+    await db.photos.toArray(),
+    DATA_VERSION,
+  );
 }
 
 export type ImportMode = 'replace' | 'merge';
@@ -107,6 +141,8 @@ export interface ImportResult {
   cards: number;
   photos: number;
   skipped: number;
+  /** Upgrade steps applied to the file's rows, if it came from an older format. */
+  migrated: string[];
 }
 
 export async function readBackupManifest(file: File): Promise<BackupManifest> {
@@ -131,6 +167,16 @@ export async function importBackup(file: File, mode: ImportMode): Promise<Import
   if (manifest.version > BACKUP_VERSION) {
     throw new Error('這個備份來自較新版本的小卡櫃，請先更新 App 再匯入');
   }
+  const fileDataVersion = manifest.dataVersion ?? 1;
+  if (isFromFuture(fileDataVersion)) {
+    throw new Error('這個備份的資料格式比這個版本的小卡櫃新，請先更新 App 再匯入');
+  }
+
+  // Bring the file's rows up to the current format and enforce every invariant
+  // before a single one reaches the database. An older backup is upgraded by
+  // exactly the same steps that live data goes through on startup, so both
+  // paths can never drift apart.
+  const upgraded = migrateTables(manifest.tables ?? {}, fileDataVersion);
 
   const photoRows: Photo[] = manifest.photos.map((meta) => {
     const full = entries[meta.file];
@@ -154,14 +200,14 @@ export async function importBackup(file: File, mode: ImportMode): Promise<Import
         for (const name of ENTITY_TABLES) await tableFor(name).clear();
         await db.photos.clear();
         for (const name of ENTITY_TABLES) {
-          await tableFor(name).bulkPut(manifest.tables[name] ?? []);
+          await tableFor(name).bulkPut(upgraded.tables[name] ?? []);
         }
         await db.photos.bulkPut(photoRows);
       } else {
         // Merge: an incoming row wins only when it is strictly newer, which is
         // the same last-write-wins rule cloud sync will use.
         for (const name of ENTITY_TABLES) {
-          for (const row of manifest.tables[name] ?? []) {
+          for (const row of upgraded.tables[name] ?? []) {
             const existing = await tableFor(name).get(row.id);
             if (existing && existing.updatedAt >= row.updatedAt) {
               skipped += 1;
@@ -178,8 +224,15 @@ export async function importBackup(file: File, mode: ImportMode): Promise<Import
       }
 
       for (const setting of manifest.settings ?? []) {
+        // Never let the file's own bookkeeping overwrite ours: restoring an old
+        // `dataVersion` would mark freshly-migrated rows as un-migrated, and a
+        // snapshot from another device is meaningless here.
+        if (setting.key === DATA_VERSION_KEY || setting.key === PRE_MIGRATION_SNAPSHOT_KEY) {
+          continue;
+        }
         await db.settings.put(setting);
       }
+      await db.settings.put({ key: DATA_VERSION_KEY, value: DATA_VERSION });
     },
   );
 
@@ -188,9 +241,10 @@ export async function importBackup(file: File, mode: ImportMode): Promise<Import
 
   return {
     mode,
-    cards: manifest.tables.cards?.length ?? 0,
+    cards: upgraded.tables.cards?.length ?? 0,
     photos: photoRows.length,
     skipped,
+    migrated: upgraded.applied,
   };
 }
 

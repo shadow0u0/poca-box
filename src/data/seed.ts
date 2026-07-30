@@ -1,10 +1,19 @@
 import { db } from './db';
 import { repo } from './repo';
+import { nameKey } from '../lib/id';
+import type { Taxonomy } from './types';
 
 /**
  * Starter classifications so the app is usable on first launch. They are
- * ordinary rows: rename, reorder or delete any of them freely. `isBuiltIn`
- * exists only so this function can tell whether it has already run.
+ * ordinary rows: rename, reorder or delete any of them freely.
+ *
+ * Seeding is *additive and remembered*. Every default name that has ever been
+ * offered is recorded in `settings`, and only names absent from that record get
+ * created. That gives two properties an install needs to survive updates:
+ *
+ *   - a default the user deleted stays deleted, instead of reappearing;
+ *   - a default added by a later release does reach existing installs, instead
+ *     of only ever showing up for brand-new ones.
  */
 const DEFAULT_SOURCES = [
   '專輯特典',
@@ -29,33 +38,68 @@ const DEFAULT_CARD_TYPES = [
 
 const DEFAULT_STATUSES = ['持有中', '待交換', '願望清單', '已出讓'];
 
+/** Legacy marker from the first release: a plain version number. */
 const SEED_KEY = 'seededVersion';
-const SEED_VERSION = 1;
+/** Names already offered, per table, so deletions are not undone. */
+const OFFERED_KEY = 'seededDefaultNames';
+
+type SeedTable = 'sources' | 'cardTypes' | 'statuses';
+
+const DEFAULTS: Record<SeedTable, string[]> = {
+  sources: DEFAULT_SOURCES,
+  cardTypes: DEFAULT_CARD_TYPES,
+  statuses: DEFAULT_STATUSES,
+};
+
+type OfferedRecord = Partial<Record<SeedTable, string[]>>;
 
 export async function seedIfNeeded(): Promise<void> {
-  const seeded = await repo.settings.get<number>(SEED_KEY, 0);
-  if (seeded >= SEED_VERSION) return;
+  const offered = await repo.settings.get<OfferedRecord>(OFFERED_KEY, {});
+  const legacySeeded = (await repo.settings.get<number>(SEED_KEY, 0)) > 0;
 
   await db.transaction('rw', db.sources, db.cardTypes, db.statuses, db.settings, async () => {
     const now = new Date().toISOString();
-    const rows = (names: string[]) =>
-      names.map((name, index) => ({
-        id: crypto.randomUUID(),
-        name,
-        sortOrder: index,
-        isBuiltIn: 1 as const,
-        createdAt: now,
-        updatedAt: now,
-        isDeleted: 0 as const,
-      }));
+    const nextOffered: OfferedRecord = { ...offered };
 
-    // `bulkAdd` rather than `bulkPut`: if a user already made their own list,
-    // an interrupted first run must not resurrect the defaults on top of it.
-    if ((await db.sources.count()) === 0) await db.sources.bulkAdd(rows(DEFAULT_SOURCES));
-    if ((await db.cardTypes.count()) === 0) await db.cardTypes.bulkAdd(rows(DEFAULT_CARD_TYPES));
-    if ((await db.statuses.count()) === 0) await db.statuses.bulkAdd(rows(DEFAULT_STATUSES));
+    for (const table of Object.keys(DEFAULTS) as SeedTable[]) {
+      const names = DEFAULTS[table];
+      const store = db[table];
 
-    await db.settings.put({ key: SEED_KEY, value: SEED_VERSION });
+      let alreadyOffered = offered[table];
+      if (!alreadyOffered) {
+        // First run under the new scheme. An install seeded by the original
+        // release already has these rows, so treat them as offered rather than
+        // trying to add them again.
+        alreadyOffered = legacySeeded || (await store.count()) > 0 ? [...names] : [];
+      }
+      const offeredKeys = new Set(alreadyOffered.map(nameKey));
+
+      // Skip anything the user already has under that name, whatever its origin.
+      const existingKeys = new Set((await store.toArray()).map((row) => nameKey(row.name)));
+
+      const missing = names.filter((n) => !offeredKeys.has(nameKey(n)) && !existingKeys.has(nameKey(n)));
+
+      if (missing.length > 0) {
+        const highest = (await store.toArray()).reduce(
+          (max, row) => Math.max(max, row.sortOrder),
+          -1,
+        );
+        const rows: Taxonomy[] = missing.map((name, index) => ({
+          id: crypto.randomUUID(),
+          name,
+          sortOrder: highest + 1 + index,
+          isBuiltIn: 1,
+          createdAt: now,
+          updatedAt: now,
+          isDeleted: 0,
+        }));
+        await store.bulkAdd(rows);
+      }
+
+      nextOffered[table] = [...new Set([...alreadyOffered, ...names])];
+    }
+
+    await db.settings.put({ key: OFFERED_KEY, value: nextOffered });
   });
 }
 

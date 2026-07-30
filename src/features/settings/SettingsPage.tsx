@@ -13,7 +13,13 @@ import { PHOTO_QUALITY_KEY, useCards, useCollections, usePhotoQuality } from '..
 import { QUALITY_PRESETS, totalPhotoBytes } from '../../data/photos';
 import { repo } from '../../data/repo';
 import { requestPersistentStorage } from '../../data/seed';
-import { formatBytes } from '../../lib/format';
+import { formatBytes, formatDate } from '../../lib/format';
+import {
+  discardPreMigrationSnapshot,
+  exportPreMigrationSnapshot,
+  getSnapshotInfo,
+  type SnapshotInfo,
+} from '../../data/upgrade';
 import { useTheme, type ThemePreference } from '../../lib/theme';
 import { TaxonomyEditor } from './TaxonomyEditor';
 
@@ -281,6 +287,70 @@ function AppearanceSection() {
   );
 }
 
+/**
+ * Only rendered when an update actually migrated data. It gives the user a way
+ * back that does not depend on them having exported a backup first.
+ */
+function RecoverySection() {
+  const [info, setInfo] = useState<SnapshotInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getSnapshotInfo().then(setInfo);
+  }, []);
+
+  if (!info) return null;
+
+  return (
+    <section className="card-surface p-4">
+      <h2 className="font-medium">升級前的自動備份</h2>
+      <p className="mt-0.5 mb-3 text-xs text-muted">
+        App 在更新資料格式（v{info.version} →）之前自動保留了當時的資料
+        （{info.cards} 張小卡，{formatDate(info.takenAt.slice(0, 10))}）。
+        如果更新後發現資料不對，可以下載成一般的備份檔留存或轉到其他裝置。照片不受資料格式更新影響。
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn-outline"
+          disabled={busy !== null}
+          onClick={async () => {
+            setBusy('export');
+            setError(null);
+            try {
+              const result = await exportPreMigrationSnapshot();
+              if (result) downloadBlob(result.blob, result.filename);
+              else setError('找不到升級前的備份');
+            } catch (e) {
+              console.error(e);
+              setError('下載失敗，請再試一次');
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          <IconDownload className="h-4 w-4" />
+          {busy === 'export' ? '準備中…' : '下載升級前的資料'}
+        </button>
+        <button
+          type="button"
+          className="btn-ghost text-muted"
+          disabled={busy !== null}
+          onClick={async () => {
+            setBusy('discard');
+            await discardPreMigrationSnapshot();
+            setInfo(null);
+          }}
+        >
+          一切正常，清除這份備份
+        </button>
+      </div>
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+    </section>
+  );
+}
+
 function DangerSection() {
   const [confirming, setConfirming] = useState(false);
   return (
@@ -320,6 +390,7 @@ export default function SettingsPage() {
       <PageHeader title="設定" subtitle="分類、備份與外觀" />
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <RecoverySection />
         <StorageSection />
         <BackupSection />
 
