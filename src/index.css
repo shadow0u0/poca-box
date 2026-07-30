@@ -1,0 +1,165 @@
+@import 'tailwindcss';
+
+/*
+ * Theme tokens are declared `inline` so the generated utilities resolve
+ * `var(--c-*)` at paint time — flipping `data-theme` on <html> reskins the whole
+ * app without rebuilding any CSS.
+ */
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-border: var(--c-border);
+  --color-text: var(--c-text);
+  --color-muted: var(--c-muted);
+  --color-accent: var(--c-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-on-accent: var(--c-on-accent);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+
+  --font-sans:
+    system-ui, -apple-system, 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+}
+
+:root {
+  color-scheme: light;
+  --c-bg: #f8f5fa;
+  --c-surface: #ffffff;
+  --c-surface-2: #f1ebf5;
+  --c-border: #e4dced;
+  --c-text: #1c1723;
+  --c-muted: #6b6277;
+  --c-accent: #8b3fb8;
+  --c-accent-soft: #f4e8fb;
+  --c-on-accent: #ffffff;
+  --c-danger: #c02b52;
+  --c-danger-soft: #fdeaef;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --c-bg: #0f0d16;
+  --c-surface: #1a1624;
+  --c-surface-2: #241e31;
+  --c-border: #332b43;
+  --c-text: #f1ecf6;
+  --c-muted: #9b8fae;
+  --c-accent: #c48ad6;
+  --c-accent-soft: #2c2139;
+  --c-on-accent: #1a1024;
+  --c-danger: #ff8fa8;
+  --c-danger-soft: #3a1f2a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-text font-sans antialiased;
+  /* Stop iOS from bouncing the whole page behind the fixed nav bars. */
+  overscroll-behavior-y: none;
+}
+
+/*
+ * Shared control styles.
+ *
+ * These are `@utility` rather than plain classes because Tailwind v4 only lets
+ * `@apply` reference registered utilities — `.btn-primary { @apply btn … }`
+ * would otherwise fail to build.
+ */
+
+/* Respect the iPhone notch and home indicator. */
+@utility safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+@utility safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-medium
+    transition-colors select-none disabled:cursor-not-allowed disabled:opacity-45;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-on-accent hover:opacity-90;
+}
+@utility btn-ghost {
+  @apply btn text-text hover:bg-surface-2;
+}
+@utility btn-outline {
+  @apply btn border border-border bg-surface text-text hover:bg-surface-2;
+}
+@utility btn-danger {
+  @apply btn bg-danger-soft text-danger hover:opacity-85;
+}
+@utility btn-sm {
+  @apply rounded-lg px-2.5 py-1 text-xs;
+}
+
+@utility field {
+  @apply w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text
+    outline-none placeholder:text-muted focus:border-accent;
+  /* iOS zooms the viewport when a focused input is under 16px. */
+  @supports (-webkit-touch-callout: none) {
+    font-size: 16px;
+  }
+}
+
+@utility label {
+  @apply mb-1.5 block text-xs font-medium text-muted;
+}
+
+@utility card-surface {
+  @apply rounded-2xl border border-border bg-surface;
+}
+
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-1
+    text-xs text-text transition-colors;
+}
+@utility chip-active {
+  @apply chip border-accent bg-accent-soft text-accent;
+}
+
+/* Photocards are 55×85mm; every thumbnail box follows that ratio. */
+@utility aspect-photocard {
+  aspect-ratio: 55 / 85;
+}
+
+/* Card detail flip */
+@utility flip-scene {
+  perspective: 1400px;
+}
+@utility flip-inner {
+  @apply relative h-full w-full transition-transform duration-500;
+  transform-style: preserve-3d;
+
+  &.is-flipped {
+    transform: rotateY(180deg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: 1ms;
+  }
+}
+@utility flip-face {
+  @apply absolute inset-0 overflow-hidden rounded-2xl;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+@utility flip-face-back {
+  transform: rotateY(180deg);
+}
+
+/* Hide scrollbars on horizontal rails without losing scrollability. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
