@@ -74,6 +74,21 @@ export async function signOut(): Promise<void> {
   await fbSignOut(auth);
 }
 
+/**
+ * A Firebase ID token for the signed-in user, or null when signed out.
+ *
+ * The SDK caches these and refreshes them automatically shortly before the one
+ * hour expiry, so the usual call is free. `force` re-mints one, which is what a
+ * 401 from our own Worker calls for — the only way a valid session produces one
+ * is a token that expired between being read and being used.
+ */
+export async function getIdToken(force = false): Promise<string | null> {
+  const { auth } = await getFirebase();
+  const user = auth.currentUser;
+  if (!user) return null;
+  return user.getIdToken(force);
+}
+
 /** Currently signed-in account, or null. Resolves once Firebase has restored state. */
 export async function currentAccount(): Promise<Account | null> {
   const { auth } = await getFirebase();

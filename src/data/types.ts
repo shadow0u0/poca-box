@@ -51,6 +51,13 @@ export interface Photo extends BaseEntity {
   width: number;
   height: number;
   bytes: number;
+  /**
+   * Set while `blob` still holds the thumbnail standing in for a full image
+   * that cloud sync has not finished downloading. Absent — not `0` — once the
+   * real image lands, because IndexedDB indexes only rows where the field
+   * exists, which is what makes "what still needs downloading" a cheap lookup.
+   */
+  pendingFull?: 1;
 }
 
 export interface Group extends BaseEntity {

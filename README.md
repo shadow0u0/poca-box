@@ -3,7 +3,7 @@
 在 **iPhone、iPad、PC 上都能用**的小卡收藏管理 App。一份程式碼、三個平台，不需要 App Store 審核，也不需要 Apple 開發者帳號。
 
 **未開啟雲端同步時，所有小卡資料與照片都只存在你自己的裝置上**，不會上傳到任何地方。
-開啟同步並用 Google 帳號登入後，資料會同步到**你自己的 Firebase 專案**，由安全規則限定只有你的帳號讀得到。同步是可選的，不登入就維持純本機。
+開啟同步並用 Google 帳號登入後，小卡資料會同步到**你自己的 Firebase 專案**，照片存放在**專屬的 Cloudflare R2 空間**，兩邊都由安全規則／權杖驗證限定只有你的帳號讀得到。同步是可選的，不登入就維持純本機。
 
 ---
 
@@ -45,15 +45,28 @@
 
 ### 跨裝置怎麼同步？
 
-**雲端同步開發中。** 目前已完成 Google 登入（設定 → 雲端同步）；資料同步本身尚未上線，
-所以跨裝置搬移暫時仍用備份 zip（在 A 裝置匯出 → 傳到 B 裝置 → 用「合併」模式匯入）。
+設定 → 雲端同步 → 用 Google 帳號登入，三台裝置就會自動同步，不需要再手動搬備份。
 
-資料層本來就是為同步設計的：每筆資料都有 UUID、`updatedAt` 與軟刪除標記，
-「較新的贏」的合併規則也已經在備份匯入功能裡運作，所有讀寫都收斂在 `src/data/repo.ts`。
+| 資料 | 放哪 |
+| --- | --- |
+| 小卡、團體、收藏夾等文字資料 | Firestore `users/{uid}/{表}/{id}` |
+| 照片原圖與縮圖 | Cloudflare R2，經 `worker/` 這支 Worker 代理 |
+
+- **合併規則**：`updatedAt` 較新者勝，軟刪除一併傳播 —— 與備份匯入用的是同一套語意。
+- **待送清單靠水位線，不靠佇列**：`updatedAt` 比「上次成功推送」新的就是還沒送的，
+  離線期間的修改自然包含在內，所以沒有 outbox 表要維護。
+- **照片是縮圖優先**：新裝置先抓縮圖（每張約 15KB）讓列表立刻能用，原圖在背景補齊。
+  補原圖時**不會動 `updatedAt`** —— 那是純本機動作，一改就會反向覆蓋雲端。
+- **雲端照片不會自動刪除**：某台裝置刪卡時，別台可能還沒同步。設定頁有手動的
+  「清理雲端未使用的照片」。
 
 登入採 `signInWithPopup`。**不要改成 `signInWithRedirect`** —— 已在實機 iPhone（加入主畫面的
 standalone 模式）驗證過會失敗：轉址流程走得完，但 `getRedirectResult` 回傳空值，
 因為 Safari 的追蹤保護把 Firebase 存在 `firebaseapp.com` 名下的暫存狀態跨站隔離了。
+
+照片為什麼不用 Firebase Cloud Storage：這個專案啟用 Storage 要求升級到 Blaze（綁信用卡）。
+R2 有 10GB 免費、無流量費，且同樣不會因為超量而產生帳單。Worker 以使用者的 Firebase
+ID token 驗證身分，**uid 只從 token 的 `sub` 取，絕不從網址取**，所以沒有辦法要到別人的照片。
 
 ---
 
@@ -87,9 +100,13 @@ npm run build:single   # 打包成單一 HTML 檔（dist-single/pocabox.html）
 ```
 src/
 ├── data/          資料層：schema、repo（唯一資料入口）、照片、備份
+│   └── sync/      雲端同步：登入、文字資料引擎、照片傳輸
 ├── features/      各功能頁面：cards / groups / folders / sets / settings
 ├── components/    共用 UI
 └── lib/           小工具（id、格式化、主題）
+
+firebase/          Firestore 安全規則
+worker/            Cloudflare Worker：照片存取（R2 + Firebase token 驗證）
 ```
 
 ### 更新既有安裝的資料（重要）

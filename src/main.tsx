@@ -20,8 +20,9 @@ async function exposeSyncForTests() {
   if (!(globalThis as { __POCABOX_FIRESTORE_EMULATOR__?: string }).__POCABOX_FIRESTORE_EMULATOR__) {
     return;
   }
-  const [engine, { repo }, { db }] = await Promise.all([
+  const [engine, photoSync, { repo }, { db }] = await Promise.all([
     import('./data/sync/engine'),
+    import('./data/sync/photos'),
     import('./data/repo'),
     import('./data/db'),
   ]);
@@ -30,6 +31,10 @@ async function exposeSyncForTests() {
       syncNow: engine.syncNow,
       resetSyncState: engine.resetSyncState,
       getSyncStatus: engine.getSyncStatus,
+      fillFullImages: photoSync.fillFullImages,
+      getPhotoSyncState: photoSync.getPhotoSyncState,
+      planCloudCleanup: photoSync.planCloudCleanup,
+      deleteCloudPhotos: photoSync.deleteCloudPhotos,
       repo,
       db,
     },

@@ -2,6 +2,7 @@ import type { Firestore } from 'firebase/firestore';
 import { ENTITY_TABLES, db, type EntityTableName } from '../db';
 import type { BaseEntity, ID } from '../types';
 import { getFirebase } from './firebase';
+import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
 
 /**
  * Metadata sync: local IndexedDB ⇄ Firestore, one document per row.
@@ -18,8 +19,10 @@ import { getFirebase } from './firebase';
  * it. The watermark only advances after a push fully succeeds, so a failure
  * mid-way simply resends next time — every write is idempotent.
  *
- * Photos are not handled here (see Phase 3). A card can arrive before its
- * image; the UI already renders a placeholder for a missing photo.
+ * Photos are handled separately in `photos.ts` — their binaries live in R2, not
+ * Firestore, and a remote row must never overwrite a local Blob. A card can
+ * arrive before its image; the UI already renders a placeholder for one that is
+ * missing.
  */
 
 const LAST_PUSHED_KEY = 'syncLastPushedAt';
@@ -175,6 +178,17 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       const pulled = await pull(fs, uid);
       const result: SyncResult = { pushed, pulled, finishedAt: new Date().toISOString() };
       setStatus({ state: 'idle', last: result });
+
+      // Photos run after the text, and their failures stay their own: an
+      // unreachable photo Worker must not make the card data look unsynced when
+      // it is safely in Firestore. The photo row in 設定 reports the problem.
+      try {
+        await syncPhotos(fs, uid);
+      } catch (photoError) {
+        console.error('photo sync failed', photoError);
+        reportPhotoSyncError(photoError);
+      }
+
       return result;
     } catch (e) {
       console.error('sync failed', e);
@@ -233,4 +247,5 @@ export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
 export async function resetSyncState(): Promise<void> {
   await db.settings.delete(LAST_PUSHED_KEY);
   await db.settings.delete(LAST_PULLED_KEY);
+  await resetPhotoSyncState();
 }

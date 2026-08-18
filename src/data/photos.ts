@@ -130,7 +130,30 @@ function releaseUrl(id: ID, variant: Variant): void {
   }
 }
 
-/** Drop a cached URL after its photo changed or was deleted. */
+// Views showing a given photo, so they can be told when its bytes change.
+// Cloud sync writes photos long after the cards that reference them: a tile
+// that mounted while the image was still downloading would otherwise sit on its
+// placeholder until the page was reloaded, because nothing about the *card*
+// changed when the photo finally arrived.
+const watchers = new Map<ID, Set<() => void>>();
+
+function watchPhoto(id: ID, onChange: () => void): () => void {
+  let set = watchers.get(id);
+  if (!set) {
+    set = new Set();
+    watchers.set(id, set);
+  }
+  set.add(onChange);
+  return () => {
+    set.delete(onChange);
+    if (set.size === 0) watchers.delete(id);
+  };
+}
+
+/**
+ * Drop a cached URL after its photo changed or was deleted, and tell anything
+ * displaying it to fetch the new version.
+ */
 export function invalidatePhotoUrl(id: ID): void {
   for (const variant of ['thumb', 'full'] as const) {
     const key = `${id}:${variant}`;
@@ -140,11 +163,20 @@ export function invalidatePhotoUrl(id: ID): void {
       urlCache.delete(key);
     }
   }
+  for (const notify of watchers.get(id) ?? []) notify();
 }
 
 /** Displayable URL for a stored photo, released automatically on unmount. */
 export function usePhotoUrl(id: ID | undefined, variant: Variant = 'thumb'): string | null {
   const [url, setUrl] = useState<string | null>(null);
+  // Bumped when the photo's bytes change under us — a sync download landing, or
+  // the full image replacing the thumbnail that was standing in for it.
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    if (!id) return;
+    return watchPhoto(id, () => setRevision((n) => n + 1));
+  }, [id]);
 
   useEffect(() => {
     if (!id) {
@@ -168,7 +200,7 @@ export function usePhotoUrl(id: ID | undefined, variant: Variant = 'thumb'): str
       setUrl(null);
       if (acquired) releaseUrl(id, variant);
     };
-  }, [id, variant]);
+  }, [id, variant, revision]);
 
   return url;
 }

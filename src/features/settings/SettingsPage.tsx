@@ -466,8 +466,8 @@ export default function SettingsPage() {
       </div>
 
       <p className="mt-6 text-center text-xs text-muted">
-        小卡櫃 · 未開啟雲端同步時，資料只存在你自己的裝置上。開啟後會同步到你自己的
-        Firebase 專案，只有你的帳號讀得到。
+        小卡櫃 · 未開啟雲端同步時，資料只存在你自己的裝置上。開啟後，文字資料會同步到
+        你自己的 Firebase 專案、照片存放在專屬的雲端空間，兩邊都只有你的帳號讀得到。
       </p>
     </>
   );

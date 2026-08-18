@@ -49,6 +49,18 @@ export class PocaBoxDB extends Dexie {
       cardSets: 'id, isDeleted, updatedAt, groupId, name, sortOrder',
       settings: 'key',
     });
+
+    // Adds one index, on the marker cloud sync sets while a photo is still
+    // showing its thumbnail in place of the full image. Dexie re-indexes the
+    // existing rows by itself; nothing else about the table changes, and
+    // version(1) above stays exactly as it shipped.
+    //
+    // The point of indexing it is that `.primaryKeys()` on this index reads ids
+    // straight out of the index — scanning the table instead would pull every
+    // photo's Blob into memory just to find the handful still waiting.
+    this.version(2).stores({
+      photos: 'id, isDeleted, updatedAt, pendingFull',
+    });
   }
 }
 
