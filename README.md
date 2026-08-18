@@ -64,6 +64,12 @@
 standalone 模式）驗證過會失敗：轉址流程走得完，但 `getRedirectResult` 回傳空值，
 因為 Safari 的追蹤保護把 Firebase 存在 `firebaseapp.com` 名下的暫存狀態跨站隔離了。
 
+**`firebase` 這個相依套件釘死在 10.12.2，不要隨手升級。** 12.x 在 iPhone 已加入主畫面的
+standalone 模式下，`signInWithPopup` 會在選完 Google 帳號之後**永遠不 resolve**：視窗有開、
+帳號也選了，但結果回不來（Firebase 靠一個掛在 `firebaseapp.com` 的隱藏 iframe 回傳結果，
+Safari 的跨站儲存隔離正好切斷這條路）。10.12.2 是實機驗證過可用的版本。
+要升級的話，請先用 `public/auth-probe.html` 在真的 iPhone 上比對新版本再動。
+
 照片為什麼不用 Firebase Cloud Storage：這個專案啟用 Storage 要求升級到 Blaze（綁信用卡）。
 R2 有 10GB 免費、無流量費，且同樣不會因為超量而產生帳單。Worker 以使用者的 Firebase
 ID token 驗證身分，**uid 只從 token 的 `sub` 取，絕不從網址取**，所以沒有辦法要到別人的照片。

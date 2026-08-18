@@ -74,7 +74,8 @@
 
     <div class="card">
       <h2>3. 試登入</h2>
-      <button id="popup">用彈出視窗登入 (signInWithPopup)</button>
+      <button id="popup">彈出視窗登入 · SDK 10.12.2</button>
+      <button id="popup12">彈出視窗登入 · SDK 12.17.1（App 用的版本）</button>
       <button id="redirect" class="alt">用轉址登入 (signInWithRedirect)</button>
       <button id="signout" class="alt">登出</button>
     </div>
@@ -123,6 +124,10 @@
         throw new Error('firebase config not set');
       }
 
+      // Both SDK versions are loaded now, before any tap. The app bundles
+      // 12.17.1 and hangs after the account picker; the probe passed Phase 0 on
+      // 10.12.2. Loading both here is what makes that a controlled comparison —
+      // same page, same authDomain, same gesture, only the SDK differs.
       const [{ initializeApp }, auth] = await Promise.all([
         import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
         import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
@@ -130,6 +135,17 @@
         $('status').textContent = '❌ 無法載入 Firebase SDK（網路問題？）';
         log(`SDK 載入失敗：${e.message}`);
         throw e;
+      });
+
+      // Loaded separately and allowed to fail on its own: if this exact version
+      // is not published on the CDN, the 10.x half of the comparison must still
+      // work rather than taking the whole page down with it.
+      const twelve = await Promise.all([
+        import('https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js'),
+        import('https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js'),
+      ]).catch((e) => {
+        log(`⚠️ 12.17.1 載入失敗（CDN 沒有這個版本？）：${e.message}`);
+        return null;
       });
 
       const {
@@ -163,14 +179,51 @@
         $('status').className = user ? 'ok' : '';
       });
 
-      $('popup').onclick = async () => {
-        log('嘗試 signInWithPopup…');
+      // The 12.17.1 side, set up the same way. Separate SDK builds keep their own
+      // module-level registries, so the two default apps do not collide.
+      let a12 = null;
+      let auth12 = null;
+      if (twelve) {
+        const [{ initializeApp: initializeApp12 }, mod12] = twelve;
+        auth12 = mod12;
+        a12 = mod12.getAuth(initializeApp12(firebaseConfig));
+        await mod12
+          .setPersistence(a12, mod12.browserLocalPersistence)
+          .catch((e) => log(`12.x setPersistence 失敗：${e.code ?? e.message}`));
+        log('12.17.1 也載入成功，兩個版本都可以測。');
+      } else {
+        $('popup12').disabled = true;
+      }
+
+      /**
+       * The failure being chased does not throw — the promise simply never
+       * settles, which on screen is indistinguishable from "still working".
+       * The timer turns that into a result worth reporting.
+       */
+      const withWatchdog = (promise, seconds = 60) =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`超過 ${seconds} 秒沒有任何回應（卡住）`)), seconds * 1000),
+          ),
+        ]);
+
+      const tryPopup = async (label, signIn) => {
+        log(`嘗試 ${label} 的 signInWithPopup…`);
         try {
-          const r = await signInWithPopup(a, provider);
-          log(`✅ 彈出視窗登入成功：${r.user.email}`);
+          const r = await withWatchdog(signIn());
+          log(`✅ ${label} 彈出視窗登入成功：${r.user.email}`);
         } catch (e) {
-          log(`❌ 彈出視窗登入失敗：${e.code ?? ''} ${e.message}`);
+          log(`❌ ${label} 彈出視窗登入失敗：${e.code ?? ''} ${e.message}`);
         }
+      };
+
+      $('popup').onclick = () => tryPopup('10.12.2', () => signInWithPopup(a, provider));
+      $('popup12').onclick = () => {
+        if (!auth12) return;
+        return tryPopup('12.17.1', () =>
+          auth12.signInWithPopup(a12, new auth12.GoogleAuthProvider()),
+        );
       };
 
       $('redirect').onclick = async () => {
@@ -183,7 +236,7 @@
       };
 
       $('signout').onclick = async () => {
-        await signOut(a);
+        await Promise.all([signOut(a), auth12 ? auth12.signOut(a12) : null]);
         log('已登出');
       };
     </script>

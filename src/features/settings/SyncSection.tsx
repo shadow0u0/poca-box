@@ -3,7 +3,7 @@ import { IconWarning } from '../../components/icons';
 import { ConfirmDialog } from '../../components/ui';
 import { SYNC_ENABLED_KEY, useSyncEnabled } from '../../data/hooks';
 import { repo } from '../../data/repo';
-import { SignInError, signIn, signOut, useAuth } from '../../data/sync/auth';
+import { SignInError, preloadSignIn, signIn, signOut, useAuth } from '../../data/sync/auth';
 import { useSync, usePhotoSyncState } from '../../data/sync/useSync';
 import { resetSyncState, type SyncStatus } from '../../data/sync/engine';
 import { deleteCloudPhotos, planCloudCleanup, type PhotoSyncState } from '../../data/sync/photos';
@@ -215,6 +215,10 @@ export function SyncSection() {
             type="button"
             className="btn-primary"
             disabled={busy}
+            // Warmed on press rather than on render: someone who never signs in
+            // should not pay for the Firebase SDK, but by the time the finger
+            // lifts it is loaded, so the popup opens while the tap still counts.
+            onPointerDown={() => void preloadSignIn().catch(() => {})}
             onClick={() => void start()}
           >
             {busy ? '登入中…' : '用 Google 帳號登入'}

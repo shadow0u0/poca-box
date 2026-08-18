@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { User } from 'firebase/auth';
+import type { Auth, User } from 'firebase/auth';
 import { getFirebase } from './firebase';
 
 /**
@@ -51,18 +51,71 @@ function describe(code: string): string {
       return '連不上網路，請確認連線後再試。';
     case 'auth/unauthorized-domain':
       return '這個網域尚未在 Firebase 授權，請聯絡開發者。';
+    case 'auth/timeout':
+      return '登入視窗沒有把結果傳回來（Safari 常見的跨站限制）。請再試一次；若仍然卡住，改用 Safari 開同一個網址登入一次即可。';
     default:
       return '登入失敗，請再試一次。';
   }
 }
 
-export async function signIn(): Promise<Account> {
+/**
+ * How long to wait for the popup before giving up.
+ *
+ * `signInWithPopup` can fail by never settling at all: the window opens, the
+ * account is chosen, and the result — which comes back through a hidden iframe
+ * on the Firebase auth domain — never arrives, because Safari partitions that
+ * cross-site context. Without a deadline the button sits on "登入中…" forever
+ * with no way out, which is the one outcome a person cannot act on.
+ */
+const SIGN_IN_TIMEOUT_MS = 75_000;
+
+interface SignInKit {
+  auth: Auth;
+  signInWithPopup: typeof import('firebase/auth').signInWithPopup;
+  GoogleAuthProvider: typeof import('firebase/auth').GoogleAuthProvider;
+}
+
+let kit: SignInKit | null = null;
+
+/**
+ * Load the auth SDK before it is needed.
+ *
+ * iOS only lets a page open a window while it still holds the user's tap. The
+ * SDK is a few hundred KB behind a dynamic import, so loading it *inside* the
+ * click handler spends that budget on a download and can leave `window.open`
+ * with no gesture left. Called from the sync UI as the button is pressed down,
+ * this makes the popup open in the same tick as the click.
+ */
+export async function preloadSignIn(): Promise<void> {
+  if (kit) return;
   const { auth } = await getFirebase();
-  const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+  const mod = await import('firebase/auth');
+  kit = {
+    auth,
+    signInWithPopup: mod.signInWithPopup,
+    GoogleAuthProvider: mod.GoogleAuthProvider,
+  };
+}
+
+export async function signIn(): Promise<Account> {
+  // Slow path only when the preload has not finished — correctness first, even
+  // though the awaits here are what can cost the gesture.
+  if (!kit) await preloadSignIn();
+  const ready = kit!;
+
   try {
-    const result = await signInWithPopup(auth, new GoogleAuthProvider());
+    const result = await Promise.race([
+      ready.signInWithPopup(ready.auth, new ready.GoogleAuthProvider()),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new SignInError(describe('auth/timeout'), 'auth/timeout')),
+          SIGN_IN_TIMEOUT_MS,
+        ),
+      ),
+    ]);
     return toAccount(result.user);
   } catch (e) {
+    if (e instanceof SignInError) throw e;
     const code = (e as { code?: string }).code ?? 'unknown';
     throw new SignInError(describe(code), code);
   }
