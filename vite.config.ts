@@ -33,6 +33,10 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // auth-probe.html is a throwaway diagnostic page that gets edited and
+        // redeployed while testing. Precaching it would serve a stale copy from
+        // the service worker and make a fixed page still look broken.
+        globIgnores: ['**/auth-probe.html'],
         // Photos live in IndexedDB, never fetched over the network, so nothing
         // here needs a runtime caching strategy — the app shell is all there is.
         cleanupOutdatedCaches: true,

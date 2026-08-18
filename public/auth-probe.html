@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>小卡櫃 · 登入測試</title>
+
+    <!-- Present so that "加入主畫面" launches this page in standalone mode, which
+         is the exact condition where Firebase Auth is known to be fragile on iOS.
+         Testing it in a normal Safari tab would not reproduce the risk. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="登入測試" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="icons/favicon.svg" />
+
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; padding: 20px 16px 48px;
+        font: 15px/1.6 system-ui, -apple-system, 'Noto Sans TC', sans-serif;
+        background: #f8f5fa; color: #1c1723;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0f0d16; color: #f1ecf6; }
+        .card { background: #1a1624 !important; border-color: #332b43 !important; }
+        pre { background: #241e31 !important; }
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .sub { color: #6b6277; font-size: 13px; margin: 0 0 20px; }
+      .card {
+        background: #fff; border: 1px solid #e4dced; border-radius: 16px;
+        padding: 16px; margin-bottom: 14px;
+      }
+      h2 { font-size: 15px; margin: 0 0 10px; }
+      button {
+        font: inherit; font-weight: 500; width: 100%;
+        padding: 12px; margin-bottom: 8px;
+        border-radius: 12px; border: 0; background: #8b3fb8; color: #fff;
+      }
+      button.alt { background: transparent; border: 1px solid #8b3fb8; color: #8b3fb8; }
+      @media (prefers-color-scheme: dark) {
+        button { background: #c48ad6; color: #1a1024; }
+        button.alt { background: transparent; border-color: #c48ad6; color: #c48ad6; }
+      }
+      pre {
+        background: #f1ebf5; padding: 12px; border-radius: 10px;
+        font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 0;
+      }
+      .ok { color: #1a7f4b; font-weight: 600; }
+      .bad { color: #c02b52; font-weight: 600; }
+      .warn { background: #fdeaef; color: #c02b52; padding: 12px; border-radius: 10px; font-size: 13px; }
+      @media (prefers-color-scheme: dark) { .warn { background: #3a1f2a; color: #ff8fa8; } }
+    </style>
+  </head>
+  <body>
+    <h1>小卡櫃 · 登入測試</h1>
+    <p class="sub">這是暫時的測試頁，用來確認 Google 登入在 iPhone 的 PWA 裡能不能用。</p>
+
+    <div id="setup" class="card" style="display:none">
+      <div class="warn">
+        還沒填入 Firebase 設定。請先建立專案並把設定貼給我。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>1. 執行環境</h2>
+      <pre id="env">偵測中…</pre>
+    </div>
+
+    <div class="card">
+      <h2>2. 登入狀態</h2>
+      <pre id="status">初始化中…</pre>
+    </div>
+
+    <div class="card">
+      <h2>3. 試登入</h2>
+      <button id="popup">用彈出視窗登入 (signInWithPopup)</button>
+      <button id="redirect" class="alt">用轉址登入 (signInWithRedirect)</button>
+      <button id="signout" class="alt">登出</button>
+    </div>
+
+    <div class="card">
+      <h2>4. 詳細結果（請整段截圖給我）</h2>
+      <pre id="log">—</pre>
+    </div>
+
+    <script type="module">
+      // Firebase's web config is not a secret; it identifies the project, and the
+      // security rules are what actually protect the data.
+      const firebaseConfig = {
+        apiKey: 'PASTE_API_KEY',
+        authDomain: 'PASTE_AUTH_DOMAIN',
+        projectId: 'PASTE_PROJECT_ID',
+        storageBucket: 'PASTE_STORAGE_BUCKET',
+        messagingSenderId: 'PASTE_SENDER_ID',
+        appId: 'PASTE_APP_ID',
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const lines = [];
+      const log = (msg) => {
+        lines.push(`${new Date().toLocaleTimeString('zh-TW')}  ${msg}`);
+        $('log').textContent = lines.join('\n');
+      };
+
+      // Standalone is the condition that matters: a page added to the home screen
+      // runs without the Safari chrome and with stricter storage partitioning.
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+      $('env').textContent = [
+        `顯示模式：${standalone ? '✅ standalone（已加入主畫面）' : '⚠️ 瀏覽器分頁（請先加入主畫面再測）'}`,
+        `網址：${location.origin}${location.pathname}`,
+        `瀏覽器：${navigator.userAgent}`,
+      ].join('\n');
+
+      if (firebaseConfig.apiKey === 'PASTE_API_KEY') {
+        $('setup').style.display = 'block';
+        $('status').textContent = '尚未設定，無法測試。';
+        log('firebaseConfig 尚未填入。');
+        throw new Error('firebase config not set');
+      }
+
+      const [{ initializeApp }, auth] = await Promise.all([
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
+      ]).catch((e) => {
+        $('status').textContent = '❌ 無法載入 Firebase SDK（網路問題？）';
+        log(`SDK 載入失敗：${e.message}`);
+        throw e;
+      });
+
+      const {
+        getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+        getRedirectResult, onAuthStateChanged, signOut, browserLocalPersistence,
+        setPersistence,
+      } = auth;
+
+      const app = initializeApp(firebaseConfig);
+      const a = getAuth(app);
+      // Without explicit local persistence the session can be lost between
+      // launches of a standalone PWA.
+      await setPersistence(a, browserLocalPersistence).catch((e) => log(`setPersistence 失敗：${e.code ?? e.message}`));
+      const provider = new GoogleAuthProvider();
+
+      log(`SDK 載入成功，authDomain = ${firebaseConfig.authDomain}`);
+
+      // A redirect sign-in finishes here, on the page load after coming back.
+      try {
+        const result = await getRedirectResult(a);
+        if (result?.user) log(`✅ 轉址登入成功：${result.user.email}`);
+        else log('（本次載入沒有待處理的轉址結果）');
+      } catch (e) {
+        log(`❌ 轉址登入失敗：${e.code ?? ''} ${e.message}`);
+      }
+
+      onAuthStateChanged(a, (user) => {
+        $('status').textContent = user
+          ? `✅ 已登入\n${user.email}\nuid: ${user.uid}`
+          : '尚未登入';
+        $('status').className = user ? 'ok' : '';
+      });
+
+      $('popup').onclick = async () => {
+        log('嘗試 signInWithPopup…');
+        try {
+          const r = await signInWithPopup(a, provider);
+          log(`✅ 彈出視窗登入成功：${r.user.email}`);
+        } catch (e) {
+          log(`❌ 彈出視窗登入失敗：${e.code ?? ''} ${e.message}`);
+        }
+      };
+
+      $('redirect').onclick = async () => {
+        log('嘗試 signInWithRedirect…（頁面會跳轉離開）');
+        try {
+          await signInWithRedirect(a, provider);
+        } catch (e) {
+          log(`❌ 轉址登入無法啟動：${e.code ?? ''} ${e.message}`);
+        }
+      };
+
+      $('signout').onclick = async () => {
+        await signOut(a);
+        log('已登出');
+      };
+    </script>
+  </body>
+</html>
