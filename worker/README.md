@@ -26,6 +26,31 @@ Google 的公開金鑰驗證簽章、發行者與 audience，再從**驗證過�
 
 ## 部署
 
+### 方式一：GitHub 自動部署（不用終端機，建議）
+
+推到 `main` 且 `worker/` 有變動時，`.github/workflows/deploy-worker.yml`
+會自動部署。第一次要先在網頁上點兩個東西：
+
+**1. 建立 R2 bucket**
+Cloudflare 主控台 → **R2 Object Storage** → **Create bucket**
+→ 名稱 `poca-box-photos` → 位置選 **Asia-Pacific (APAC)** → 建立。
+
+**2. 建立 API 權杖並存進 GitHub**
+- Cloudflare 右上角頭像 → **My Profile** → **API Tokens** → **Create Token**
+- 選 **Edit Cloudflare Workers** 這個範本 → 一路 Continue → **Create Token**
+- 複製產生的權杖（**只會顯示一次**）
+- 同一頁的 Workers & Pages 總覽右側可以找到 **Account ID**，一併複製
+- 到 GitHub repo → **Settings** → **Secrets and variables** → **Actions**
+  → **New repository secret**，新增兩筆：
+  | Name | Value |
+  | --- | --- |
+  | `CLOUDFLARE_API_TOKEN` | 剛剛複製的權杖 |
+  | `CLOUDFLARE_ACCOUNT_ID` | 你的 Account ID |
+
+之後到 GitHub 的 **Actions** 分頁，手動跑一次 **Deploy photo worker** 即可。
+
+### 方式二：本機終端機
+
 ```bash
 cd worker
 npm install
@@ -34,8 +59,10 @@ npx wrangler r2 bucket create poca-box-photos
 npx wrangler deploy
 ```
 
+### 兩種方式都一樣
+
 部署後會得到一個 `https://poca-box-photos.<你的帳號>.workers.dev` 網址，
-把它填進 App 的 `src/data/sync/photoStore.ts`。
+填進 App 的 `src/data/sync/photoStore.ts`。
 
 ## 本機測試
 
