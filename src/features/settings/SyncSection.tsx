@@ -4,6 +4,8 @@ import { ConfirmDialog } from '../../components/ui';
 import { SYNC_ENABLED_KEY, useSyncEnabled } from '../../data/hooks';
 import { repo } from '../../data/repo';
 import { SignInError, signIn, signOut, useAuth } from '../../data/sync/auth';
+import { useSync } from '../../data/sync/useSync';
+import { resetSyncState, type SyncStatus } from '../../data/sync/engine';
 
 /**
  * Cloud sync account controls.
@@ -12,12 +14,59 @@ import { SignInError, signIn, signOut, useAuth } from '../../data/sync/auth';
  * renders its introduction without any network work for someone who has not
  * enabled it.
  */
+/** Compact live view of what sync is doing right now. */
+function SyncStatusRow({
+  status,
+  onRetry,
+}: {
+  status: SyncStatus;
+  onRetry: () => void;
+}) {
+  const dot =
+    status.state === 'syncing'
+      ? 'bg-accent animate-pulse'
+      : status.state === 'error'
+        ? 'bg-danger'
+        : status.state === 'offline'
+          ? 'bg-muted'
+          : 'bg-emerald-500';
+
+  const label =
+    status.state === 'syncing'
+      ? '同步中…'
+      : status.state === 'offline'
+        ? '離線，連上網路後會自動同步'
+        : status.state === 'error'
+          ? status.message
+          : status.last
+            ? `已同步 · ${formatTime(status.last.finishedAt)}`
+            : '等待同步';
+
+  return (
+    <div className="mb-3 flex items-center gap-2.5 rounded-xl bg-surface-2 px-3 py-2.5">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+      <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+      {status.state !== 'syncing' && (
+        <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
+          立即同步
+        </button>
+      )}
+    </div>
+  );
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+}
+
 export function SyncSection() {
   const enabled = useSyncEnabled();
   const auth = useAuth(enabled === true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOff, setConfirmOff] = useState(false);
+  const uid = auth.status === 'signed-in' ? auth.account.uid : undefined;
+  const sync = useSync(uid);
 
   // `undefined` means the setting is still loading from IndexedDB.
   if (enabled === undefined) return null;
@@ -42,6 +91,7 @@ export function SyncSection() {
     setBusy(true);
     try {
       await signOut();
+      await resetSyncState();
       await repo.settings.set(SYNC_ENABLED_KEY, false);
       setConfirmOff(false);
     } catch (e) {
@@ -61,7 +111,7 @@ export function SyncSection() {
           <p className="mt-0.5 mb-3 text-xs text-muted">
             登入後，小卡資料與照片會同步到你自己的 Firebase 專案，iPhone、iPad 與電腦
             看到的都一樣。不登入的話，一切維持現狀 —— 資料只留在這台裝置。
-            （同步功能開發中，目前只有登入可用。）
+            （目前同步文字資料，照片同步開發中。）
           </p>
           <button
             type="button"
@@ -77,9 +127,10 @@ export function SyncSection() {
       ) : (
         <>
           <p className="mt-0.5 mb-3 text-xs text-muted">
-            已登入。<strong>資料同步本身還在開發中</strong> —— 目前登入只是先建立帳號連結，
-            小卡還不會上傳。完成後這裡會顯示同步狀態。
+            已登入。小卡的文字資料會自動同步；<strong>照片同步還在開發中</strong>，
+            所以另一台裝置目前會看到卡片但沒有圖。
           </p>
+          <SyncStatusRow status={sync.status} onRetry={sync.syncNow} />
           <div className="mb-3 flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5">
             {auth.account.photoURL ? (
               <img src={auth.account.photoURL} alt="" className="h-9 w-9 rounded-full" />
