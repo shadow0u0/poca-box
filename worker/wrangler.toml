@@ -1,0 +1,11 @@
+name = "poca-box-photos"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "poca-box-photos"
+
+[vars]
+FIREBASE_PROJECT_ID = "poca-box"
+ALLOWED_ORIGINS = "https://shadow0u0.github.io,http://127.0.0.1:4700,http://localhost:5173"
