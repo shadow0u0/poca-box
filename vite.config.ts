@@ -37,6 +37,12 @@ export default defineConfig({
         // redeployed while testing. Precaching it would serve a stale copy from
         // the service worker and make a fixed page still look broken.
         globIgnores: ['**/auth-probe.html'],
+        // ...but excluding it from the precache is not enough on its own. The
+        // generated worker routes *every* navigation to the app's index.html
+        // (createHandlerBoundToURL("index.html")), so a non-precached page ends
+        // up rendering the app instead of itself. Any standalone page added to
+        // public/ needs an entry here, or it will silently serve the SPA.
+        navigateFallbackDenylist: [/auth-probe\.html$/],
         // Photos live in IndexedDB, never fetched over the network, so nothing
         // here needs a runtime caching strategy — the app shell is all there is.
         cleanupOutdatedCaches: true,
