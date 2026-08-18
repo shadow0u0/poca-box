@@ -88,12 +88,12 @@
       // Firebase's web config is not a secret; it identifies the project, and the
       // security rules are what actually protect the data.
       const firebaseConfig = {
-        apiKey: 'PASTE_API_KEY',
-        authDomain: 'PASTE_AUTH_DOMAIN',
-        projectId: 'PASTE_PROJECT_ID',
-        storageBucket: 'PASTE_STORAGE_BUCKET',
-        messagingSenderId: 'PASTE_SENDER_ID',
-        appId: 'PASTE_APP_ID',
+        apiKey: 'AIzaSyCoy6b1FNjlTq67xccsohCUikFhyFpyYk4',
+        authDomain: 'poca-box.firebaseapp.com',
+        projectId: 'poca-box',
+        storageBucket: 'poca-box.firebasestorage.app',
+        messagingSenderId: '43048402355',
+        appId: '1:43048402355:web:f88d63d4f7ff131c5a5fc6',
       };
 
       const $ = (id) => document.getElementById(id);
@@ -113,7 +113,10 @@
         `瀏覽器：${navigator.userAgent}`,
       ].join('\n');
 
-      if (firebaseConfig.apiKey === 'PASTE_API_KEY') {
+      // Built by concatenation so that find-and-replacing the placeholder with a
+      // real key cannot also rewrite this comparison into `key === key`.
+      const NOT_CONFIGURED = 'PASTE' + '_API_KEY';
+      if (!firebaseConfig.apiKey || firebaseConfig.apiKey === NOT_CONFIGURED) {
         $('setup').style.display = 'block';
         $('status').textContent = '尚未設定，無法測試。';
         log('firebaseConfig 尚未填入。');
