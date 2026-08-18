@@ -16,6 +16,7 @@ import type {
 } from './types';
 
 export const PHOTO_QUALITY_KEY = 'photoQuality';
+export const SYNC_ENABLED_KEY = 'syncEnabled';
 
 export interface Collections {
   groups: Group[];
@@ -57,6 +58,14 @@ export function usePhotoQuality(): PhotoQuality {
     [],
   );
   return stored ?? DEFAULT_QUALITY;
+}
+
+/**
+ * Whether the user has opted into cloud sync. Gates loading the Firebase SDK at
+ * all, so someone who never turns sync on never pays for it.
+ */
+export function useSyncEnabled(): boolean | undefined {
+  return useLiveQuery(() => repo.settings.get<boolean>(SYNC_ENABLED_KEY, false), []);
 }
 
 export function useCards(): Card[] | undefined {

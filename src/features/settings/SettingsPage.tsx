@@ -21,6 +21,7 @@ import {
   type SnapshotInfo,
 } from '../../data/upgrade';
 import { useTheme, type ThemePreference } from '../../lib/theme';
+import { SyncSection } from './SyncSection';
 import { TaxonomyEditor } from './TaxonomyEditor';
 
 function StorageSection() {
@@ -390,6 +391,7 @@ export default function SettingsPage() {
       <PageHeader title="設定" subtitle="分類、備份與外觀" />
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <SyncSection />
         <RecoverySection />
         <StorageSection />
         <BackupSection />
@@ -464,7 +466,8 @@ export default function SettingsPage() {
       </div>
 
       <p className="mt-6 text-center text-xs text-muted">
-        小卡櫃 · 所有資料都只存在你自己的裝置上，不會上傳到任何伺服器。
+        小卡櫃 · 未開啟雲端同步時，資料只存在你自己的裝置上。開啟後會同步到你自己的
+        Firebase 專案，只有你的帳號讀得到。
       </p>
     </>
   );

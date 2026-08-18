@@ -46,7 +46,7 @@ export default function App() {
           ))}
         </nav>
         <p className="mt-auto px-3 text-[11px] leading-relaxed text-muted">
-          資料只存在這台裝置上。
+          未開啟同步時，資料只存在這台裝置上。
           <br />
           記得定期到設定匯出備份。
         </p>
