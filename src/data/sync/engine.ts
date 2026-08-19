@@ -3,7 +3,7 @@ import { ENTITY_TABLES, db, type EntityTableName } from '../db';
 import type { BaseEntity, ID } from '../types';
 import { getFirebase } from './firebase';
 import { dedupeTaxonomies } from '../dedupe';
-import { SYNC_LAST_PULLED_KEY } from '../hooks';
+import { SYNC_ENABLED_KEY, SYNC_LAST_UID_KEY, SYNC_LAST_PULLED_KEY } from '../hooks';
 import { suppressLocalWrites, watchLocalWrites } from './localWrites';
 import { seedIfNeeded } from '../seed';
 import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
@@ -45,6 +45,12 @@ export type SyncStatus =
   | { state: 'idle'; last?: SyncResult }
   | { state: 'syncing' }
   | { state: 'offline' }
+  /**
+   * A different account signed in on a device that still holds someone else's
+   * collection. Nothing is pushed or pulled until the person says which they
+   * meant — see `resolveAccountChange`.
+   */
+  | { state: 'account-changed'; previousUid: string; uid: string }
   | { state: 'error'; message: string };
 
 type Listener = (status: SyncStatus) => void;
@@ -175,9 +181,26 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       setStatus({ state: 'offline' });
       return null;
     }
+    // Before anything is sent anywhere: is this the account whose collection is
+    // sitting in this database? Signing out keeps the data anyway — someone
+    // pausing sync would be appalled to lose it — so a device can be holding one
+    // person's library while a second person signs in. Pushing here would put
+    // the first person's collection in the second person's account, and pull
+    // theirs down on top. Both are silent and neither is undoable, so this stops
+    // and asks instead.
+    const previousUid = await readWatermark(SYNC_LAST_UID_KEY);
+    if (previousUid && previousUid !== uid) {
+      setStatus({ state: 'account-changed', previousUid, uid });
+      return null;
+    }
+
     setStatus({ state: 'syncing' });
     try {
       const fs = await firestore();
+      // Claim the device for this account *before* the first push. Recording it
+      // afterwards would leave a failed first round looking like a fresh device
+      // on the retry, which is exactly when the collection would leak.
+      if (!previousUid) await db.settings.put({ key: SYNC_LAST_UID_KEY, value: uid });
       const pushed = await push(fs, uid);
       // Everything from here writes rows this device did not author, so it must
       // not read as a local edit. Not a runaway risk — `pull` skips rows that
@@ -300,9 +323,51 @@ export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
   };
 }
 
-/** Forget both watermarks so the next sync reconciles everything. */
+/**
+ * Forget both watermarks so the next sync reconciles everything.
+ *
+ * Deliberately keeps `SYNC_LAST_UID_KEY`: signing out is the moment a device
+ * most often changes hands, and forgetting who was here is precisely what would
+ * let the next account absorb this one's collection unnoticed.
+ */
 export async function resetSyncState(): Promise<void> {
   await db.settings.delete(LAST_PUSHED_KEY);
   await db.settings.delete(LAST_PULLED_KEY);
   await resetPhotoSyncState();
+}
+
+export type AccountChangeChoice = 'replace' | 'merge';
+
+/**
+ * Answer the question raised by `state: 'account-changed'` and sync.
+ *
+ * `replace` is for a device that changed hands: the local collection is dropped
+ * and the new account's is downloaded. It uses `clearAllData`, which deletes
+ * outright rather than writing tombstones, so **neither account's cloud copy is
+ * touched** — the previous owner keeps everything on their other devices.
+ *
+ * `merge` is the old behaviour, now only ever reached deliberately: someone
+ * with two accounts of their own who wants the two libraries combined.
+ */
+export async function resolveAccountChange(
+  uid: string,
+  choice: AccountChangeChoice,
+): Promise<void> {
+  if (choice === 'replace') {
+    const { clearAllData } = await import('../backup');
+    await suppressLocalWrites(async () => {
+      await clearAllData();
+      await resetPhotoSyncState();
+    });
+    // `clearAllData` empties `settings` too, so the opt-in has to be written
+    // back or sync would switch itself off as a side effect of this choice.
+    await db.settings.put({ key: SYNC_ENABLED_KEY, value: true });
+  } else {
+    await db.settings.delete(LAST_PUSHED_KEY);
+    await db.settings.delete(LAST_PULLED_KEY);
+  }
+
+  await db.settings.put({ key: SYNC_LAST_UID_KEY, value: uid });
+  setStatus({ state: 'idle' });
+  await syncNow(uid);
 }

@@ -23,6 +23,15 @@ export const SYNC_ENABLED_KEY = 'syncEnabled';
  * not drag the engine into the first-paint path to do so.
  */
 export const SYNC_LAST_PULLED_KEY = 'syncLastPulledAt';
+/**
+ * The account this device last synced with.
+ *
+ * Local data outlives a sign-out by design, so without this a different account
+ * signing in on the same browser would push the previous person's collection
+ * into theirs — the watermarks having just been cleared, every local row looks
+ * unsent. Comparing against this is what turns that into a question.
+ */
+export const SYNC_LAST_UID_KEY = 'syncLastUid';
 
 export interface Collections {
   groups: Group[];

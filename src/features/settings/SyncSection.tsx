@@ -12,7 +12,13 @@ import {
   useAuth,
 } from '../../data/sync/auth';
 import { useSyncStatus, usePhotoSyncState } from '../../data/sync/useSync';
-import { resetSyncState, syncNow, type SyncStatus } from '../../data/sync/engine';
+import {
+  resetSyncState,
+  resolveAccountChange,
+  syncNow,
+  type SyncStatus,
+} from '../../data/sync/engine';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { deleteCloudPhotos, planCloudCleanup, type PhotoSyncState } from '../../data/sync/photos';
 
 /**
@@ -33,7 +39,7 @@ function SyncStatusRow({
   const dot =
     status.state === 'syncing'
       ? 'bg-accent animate-pulse'
-      : status.state === 'error'
+      : status.state === 'error' || status.state === 'account-changed'
         ? 'bg-danger'
         : status.state === 'offline'
           ? 'bg-muted'
@@ -46,19 +52,83 @@ function SyncStatusRow({
         ? '離線，連上網路後會自動同步'
         : status.state === 'error'
           ? status.message
-          : status.last
-            ? `已同步 · ${formatTime(status.last.finishedAt)}`
-            : '等待同步';
+          : status.state === 'account-changed'
+            ? '已暫停同步，請先確認下方的選擇'
+            : status.last
+              ? `已同步 · ${formatTime(status.last.finishedAt)}`
+              : '等待同步';
 
   return (
     <div className="mb-3 flex items-center gap-2.5 rounded-xl bg-surface-2 px-3 py-2.5">
       <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
       <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
-      {status.state !== 'syncing' && (
+      {/* No retry while the account question is open: syncNow would refuse
+          anyway, and offering it reads as "just press this to fix it". */}
+      {status.state !== 'syncing' && status.state !== 'account-changed' && (
         <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
           立即同步
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Shown when the signed-in account is not the one whose collection is on this
+ * device. Sync is stopped until one of these is chosen — there is no safe
+ * default, because both possibilities are plausible and neither is reversible.
+ */
+function AccountChangedPanel({
+  count,
+  busy,
+  onReplace,
+  onMerge,
+  onCancel,
+}: {
+  count: number | undefined;
+  busy: boolean;
+  onReplace: () => void;
+  onMerge: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    // Surface, not danger-soft: `btn-danger` *is* danger-soft, so on that ground
+    // the destructive choice lost its fill and read as plain text while the
+    // merge button looked solid — the more dangerous option looking primary.
+    <div className="mb-3 rounded-xl border border-danger/40 bg-surface p-3.5">
+      <div className="flex gap-2">
+        <IconWarning className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-danger">這台裝置上是別的帳號的資料</p>
+          <p className="mt-1 text-xs text-muted">
+            這台裝置目前存著另一個帳號的
+            {count === undefined ? '小卡' : ` ${count} 張小卡`}
+            。在你選擇之前，<strong>同步已經停住</strong>，不會上傳也不會下載。
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-2">
+        <button type="button" className="btn-danger" disabled={busy} onClick={onReplace}>
+          這台換人用了，清空本機再下載我的資料
+        </button>
+        {/* Kept on one line on purpose: JSX turns a source line break into a
+            space, which is invisible in English and glaring between 漢字. */}
+        <p className="-mt-1 text-xs text-muted">
+          只刪這台裝置上的，<strong>不會動到任何一個帳號的雲端</strong>，原本的人在他自己的裝置上一切照舊。
+        </p>
+
+        <button type="button" className="btn-outline" disabled={busy} onClick={onMerge}>
+          這是我的另一個帳號，合併起來
+        </button>
+        <p className="-mt-1 text-xs text-muted">
+          這台裝置上的收藏會上傳到現在登入的帳號，兩邊合併成一份。
+        </p>
+
+        <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>
+          先登出，什麼都不要動
+        </button>
+      </div>
     </div>
   );
 }
@@ -138,6 +208,11 @@ export function SyncSection() {
   // screen is closed.
   const syncStatus = useSyncStatus();
   const photos = usePhotoSyncState();
+  // Only read while the account question is open, to say how much is at stake.
+  const strandedCards = useLiveQuery(
+    () => (syncStatus.state === 'account-changed' ? repo.cards.list() : Promise.resolve(null)),
+    [syncStatus.state],
+  );
 
   useEffect(() => onSignInTrace(setTrace), []);
 
@@ -168,6 +243,20 @@ export function SyncSection() {
     } catch (e) {
       setError(e instanceof SignInError ? e.message : '登入失敗，請再試一次。');
       setShowTrace(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const answerAccountChange = async (choice: 'replace' | 'merge') => {
+    if (!uid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await resolveAccountChange(uid, choice);
+    } catch (e) {
+      console.error(e);
+      setError('處理失敗，請再試一次。');
     } finally {
       setBusy(false);
     }
@@ -234,8 +323,7 @@ export function SyncSection() {
       {!enabled || auth.status === 'signed-out' ? (
         <>
           <p className="mt-0.5 mb-3 text-xs text-muted">
-            登入後，小卡資料與照片會同步到你自己的雲端空間，iPhone、iPad 與電腦
-            看到的都一樣。不登入的話，一切維持現狀 —— 資料只留在這台裝置。
+            登入後，小卡資料與照片會同步到你自己的雲端空間，iPhone、iPad 與電腦看到的都一樣。不登入的話，一切維持現狀 —— 資料只留在這台裝置。
           </p>
           <button
             type="button"
@@ -255,8 +343,7 @@ export function SyncSection() {
       ) : (
         <>
           <p className="mt-0.5 mb-3 text-xs text-muted">
-            已登入，資料與照片都會自動同步。新裝置會先下載縮圖讓你立刻能翻，
-            原圖在背景慢慢補齊。
+            已登入，資料與照片都會自動同步。新裝置會先下載縮圖讓你立刻能翻，原圖在背景慢慢補齊。
           </p>
           <SyncStatusRow
             status={syncStatus}
@@ -264,6 +351,15 @@ export function SyncSection() {
               if (uid) void syncNow(uid);
             }}
           />
+          {syncStatus.state === 'account-changed' && (
+            <AccountChangedPanel
+              count={strandedCards?.length}
+              busy={busy}
+              onReplace={() => void answerAccountChange('replace')}
+              onMerge={() => void answerAccountChange('merge')}
+              onCancel={() => void stop()}
+            />
+          )}
           <PhotoSyncRow state={photos} />
           <div className="mb-3 flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5">
             {auth.account.photoURL ? (
@@ -347,7 +443,7 @@ export function SyncSection() {
       <ConfirmDialog
         open={confirmOff}
         title="登出並關閉同步？"
-        message="這台裝置上的小卡資料會保留，只是不再與雲端同步。雲端上的資料不會被刪除。"
+        message="這台裝置上的小卡資料會保留，只是不再與雲端同步；雲端上的資料也不會被刪除。若這台裝置要交給別人使用，請另外用「清除所有資料」把本機清乾淨——否則對方登入時，App 會先問要不要把這些資料併進他的帳號。"
         confirmLabel="登出"
         onConfirm={() => void stop()}
         onCancel={() => setConfirmOff(false)}
