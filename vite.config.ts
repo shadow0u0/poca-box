@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -7,8 +8,32 @@ import { VitePWA } from 'vite-plugin-pwa';
 // domain root too. Renaming the repository cannot break the site this way.
 const base = process.env.BASE_PATH ?? './';
 
+/**
+ * A build stamp shown in 設定.
+ *
+ * "Am I running the new version yet?" has cost two rounds of debugging on real
+ * devices: a service worker can serve a build from days ago, and neither the UI
+ * copy nor the behaviour reliably distinguishes one release from the next. A
+ * commit and a timestamp on screen turns that into a glance.
+ */
+function buildId(): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  try {
+    const sha = execSync('git rev-parse --short HEAD', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    return `${stamp} · ${sha}`;
+  } catch {
+    // Building outside a git checkout — the timestamp alone still identifies it.
+    return stamp;
+  }
+}
+
 export default defineConfig({
   base,
+  define: { __BUILD_ID__: JSON.stringify(buildId()) },
   plugins: [
     react(),
     VitePWA({

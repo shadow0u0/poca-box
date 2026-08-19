@@ -469,6 +469,9 @@ export default function SettingsPage() {
         小卡櫃 · 未開啟雲端同步時，資料只存在你自己的裝置上。開啟後，文字資料會同步到
         你自己的 Firebase 專案、照片存放在專屬的雲端空間，兩邊都只有你的帳號讀得到。
       </p>
+      {/* Which build is actually running — a service worker can keep serving an
+          old one long after a deploy, and nothing else on screen gives it away. */}
+      <p className="mt-1 text-center font-mono text-[11px] text-muted/70">版本 {__BUILD_ID__}</p>
     </>
   );
 }

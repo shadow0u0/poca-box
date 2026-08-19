@@ -29,8 +29,24 @@ async function exposeSyncForTests() {
     import('./data/repo'),
     import('./data/db'),
   ]);
+  // Signing in with a password is a test-only path — the real UI offers Google
+  // and nothing else — but it is the only way to drive a genuine signed-in
+  // session, which is exactly the link a uid override would skip over.
+  const signInForTests = async (email: string, password: string) => {
+    const { getFirebase } = await import('./data/sync/firebase');
+    const { auth } = await getFirebase();
+    const fb = await import('firebase/auth');
+    try {
+      await fb.signInWithEmailAndPassword(auth, email, password);
+    } catch {
+      await fb.createUserWithEmailAndPassword(auth, email, password);
+    }
+    return auth.currentUser?.uid ?? null;
+  };
+
   Object.assign(globalThis, {
     __pocabox: {
+      signInForTests,
       syncNow: engine.syncNow,
       resetSyncState: engine.resetSyncState,
       getSyncStatus: engine.getSyncStatus,

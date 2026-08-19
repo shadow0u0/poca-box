@@ -220,8 +220,26 @@ export function useAuth(enabled = true): AuthState {
     enabled ? { status: 'loading' } : { status: 'signed-out' },
   );
 
+  // Automated tests stand in for Google here, at the identity boundary, rather
+  // than further down where the uid is consumed. Everything the app actually
+  // wires together — the opt-in setting, this hook, and whoever depends on its
+  // uid — is then the real thing under test. Only sign-in itself is stubbed.
+  // Requires the emulator global, which a production build never sets.
+  const test = globalThis as {
+    __POCABOX_FIRESTORE_EMULATOR__?: string;
+    __POCABOX_TEST_UID__?: string;
+  };
+  const testUid = test.__POCABOX_FIRESTORE_EMULATOR__ ? test.__POCABOX_TEST_UID__ : undefined;
+
   useEffect(() => {
     if (!enabled) return;
+    if (testUid) {
+      setState({
+        status: 'signed-in',
+        account: { uid: testUid, email: 'test@example.invalid', displayName: '測試帳號', photoURL: null },
+      });
+      return;
+    }
     let stop: (() => void) | undefined;
     let cancelled = false;
 
@@ -243,7 +261,7 @@ export function useAuth(enabled = true): AuthState {
       cancelled = true;
       stop?.();
     };
-  }, [enabled]);
+  }, [enabled, testUid]);
 
   return state;
 }

@@ -32,6 +32,15 @@ export function getFirebase(): Promise<{ app: FirebaseApp; auth: Auth }> {
     ]);
     const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
     const auth = authMod.getAuth(app);
+
+    // Automated tests point auth at the local emulator so the real
+    // `useSyncEnabled → useAuth → uid → startAutoSync` chain can be exercised
+    // end to end. Production never sets this global.
+    const emulator = (globalThis as { __POCABOX_AUTH_EMULATOR__?: string })
+      .__POCABOX_AUTH_EMULATOR__;
+    if (emulator) {
+      authMod.connectAuthEmulator(auth, `http://${emulator}`, { disableWarnings: true });
+    }
     // Explicit local persistence: without it a standalone PWA can lose the
     // session between launches.
     await authMod

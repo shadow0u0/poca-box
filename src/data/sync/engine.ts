@@ -257,10 +257,20 @@ export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
   document.addEventListener('visibilitychange', onVisible);
   window.addEventListener('online', run);
 
+  // `pageshow` and `focus` as well as visibilitychange: an installed iOS app
+  // coming back from the app switcher is often restored from the back/forward
+  // cache, where `pageshow` fires and `visibilitychange` may not. Belt and
+  // braces — `syncNow` collapses overlapping rounds, so extra triggers cost
+  // nothing.
+  window.addEventListener('pageshow', onVisible);
+  window.addEventListener('focus', onVisible);
+
   return () => {
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onVisible);
     window.removeEventListener('online', run);
+    window.removeEventListener('pageshow', onVisible);
+    window.removeEventListener('focus', onVisible);
   };
 }
 

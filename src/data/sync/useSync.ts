@@ -22,17 +22,7 @@ export function useBackgroundSync(): void {
   // `useAuth(false)` touches no Firebase at all, so someone who never turned
   // sync on still pays nothing for it at startup.
   const auth = useAuth(enabled === true);
-
-  // Automated tests drive the engine without a Google account. Only honoured
-  // alongside the emulator global, which a production build never sets, so this
-  // cannot supply a uid to a real user's app.
-  const test = globalThis as {
-    __POCABOX_FIRESTORE_EMULATOR__?: string;
-    __POCABOX_TEST_UID__?: string;
-  };
-  const testUid = test.__POCABOX_FIRESTORE_EMULATOR__ ? test.__POCABOX_TEST_UID__ : undefined;
-
-  const uid = testUid ?? (auth.status === 'signed-in' ? auth.account.uid : undefined);
+  const uid = auth.status === 'signed-in' ? auth.account.uid : undefined;
 
   useEffect(() => {
     if (!uid) return;
