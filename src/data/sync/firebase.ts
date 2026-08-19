@@ -1,5 +1,6 @@
 import type { FirebaseApp } from 'firebase/app';
 import type { Auth } from 'firebase/auth';
+import type { Firestore } from 'firebase/firestore';
 
 /**
  * Firebase is loaded on demand, never at startup.
@@ -49,4 +50,34 @@ export function getFirebase(): Promise<{ app: FirebaseApp; auth: Auth }> {
     return { app, auth };
   })();
   return appPromise;
+}
+
+let firestorePromise: Promise<Firestore> | null = null;
+
+/**
+ * The Firestore handle, initialised once.
+ *
+ * Lives here rather than in the sync engine because `initializeFirestore` may
+ * only be called once per app — a second caller wanting Firestore (deleting a
+ * photo's metadata during cloud cleanup, say) cannot simply set up its own.
+ */
+export function getFirestore(): Promise<Firestore> {
+  firestorePromise ??= (async () => {
+    const { app } = await getFirebase();
+    const { initializeFirestore, connectFirestoreEmulator } = await import('firebase/firestore');
+    // Rows have optional fields that are genuinely `undefined`; without this
+    // Firestore throws instead of simply omitting them.
+    const fs = initializeFirestore(app, { ignoreUndefinedProperties: true });
+
+    // Automated tests point the app at a local emulator. Guarded on an explicit
+    // global so a production build can never be redirected by accident.
+    const emulator = (globalThis as { __POCABOX_FIRESTORE_EMULATOR__?: string })
+      .__POCABOX_FIRESTORE_EMULATOR__;
+    if (emulator) {
+      const [host, port] = emulator.split(':');
+      connectFirestoreEmulator(fs, host, Number(port));
+    }
+    return fs;
+  })();
+  return firestorePromise;
 }

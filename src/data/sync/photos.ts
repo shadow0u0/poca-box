@@ -3,6 +3,7 @@ import { db } from '../db';
 import { invalidatePhotoUrl } from '../photos';
 import type { ID, Photo } from '../types';
 import { getIdToken } from './auth';
+import { getFirestore } from './firebase';
 import { suppressLocalWrites } from './localWrites';
 
 /**
@@ -244,7 +245,18 @@ async function pushPhotos(fs: Firestore, uid: string): Promise<void> {
  * the card detail view is simply a little soft for a moment.
  */
 async function downloadThumb(meta: PhotoMeta): Promise<void> {
-  const res = await expectOk(await api(`/photos/${meta.id}/thumb`), '下載縮圖');
+  const res = await api(`/photos/${meta.id}/thumb`);
+  if (res.status === 404) {
+    // The metadata outlived its file — "清理雲端未使用的照片" deletes from R2 and
+    // this row may not have been removed, or an upload died between its two
+    // PUTs. Treating that as a failure was worse than the missing photo: the
+    // pull watermark stops at the first failure, so one absent file wedged
+    // every photo behind it, on every round, indefinitely. `fillOne` already
+    // gave up gracefully on a missing full image; this is the same call.
+    console.warn('thumbnail missing in cloud, skipping', meta.id);
+    return;
+  }
+  await expectOk(res, '下載縮圖');
   const thumb = await res.blob();
   await db.photos.put({
     ...meta,
@@ -476,7 +488,7 @@ export async function resetPhotoSyncState(): Promise<void> {
 
 export interface CloudCleanupPlan {
   ids: ID[];
-  /** Ids the cloud holds that no live card or folder cover refers to. */
+  /** Ids the cloud holds that no live card refers to. */
   total: number;
 }
 
@@ -488,6 +500,11 @@ export interface CloudCleanupPlan {
  * photo may still be the only copy of an image a second card was about to use.
  * So this is an explicit action in 設定, and it reads the *local* library — run
  * it from a device that is fully synced.
+ *
+ * Cards are the only thing that refers to a photo. Group, member and folder
+ * covers look like a second referrer but are not: they are picked from whatever
+ * card the collection happens to hold (`coverPhotoId` in `GroupsPage`), so a
+ * photo they show is always one a live card owns.
  */
 export async function planCloudCleanup(): Promise<CloudCleanupPlan> {
   const remote = await cloudIds();
@@ -498,20 +515,33 @@ export async function planCloudCleanup(): Promise<CloudCleanupPlan> {
     if (card.frontPhotoId) referenced.add(card.frontPhotoId);
     if (card.backPhotoId) referenced.add(card.backPhotoId);
   });
-  await db.folders.each((folder) => {
-    if (folder.isDeleted === 0 && folder.coverPhotoId) referenced.add(folder.coverPhotoId);
-  });
 
   const ids = [...remote].filter((id) => !referenced.has(id));
   return { ids, total: ids.length };
 }
 
-/** Delete the given photos from the cloud, both variants. Local rows are untouched. */
-export async function deleteCloudPhotos(ids: ID[]): Promise<number> {
+/**
+ * Delete the given photos from the cloud — files *and* metadata. Local rows are
+ * untouched.
+ *
+ * Removing only the files used to leave the Firestore row behind, still
+ * advertising a photo that no longer existed, so every other device kept asking
+ * for it and getting a 404. `downloadThumb` now survives that, but the row
+ * should not be there in the first place.
+ */
+export async function deleteCloudPhotos(uid: string, ids: ID[]): Promise<number> {
+  const [fs, { deleteDoc, doc }] = await Promise.all([
+    getFirestore(),
+    import('firebase/firestore'),
+  ]);
+
   let deleted = 0;
   await pool(ids, PARALLEL, async (id) => {
     await expectOk(await api(`/photos/${id}`, { method: 'DELETE' }), '刪除雲端照片');
     await expectOk(await api(`/photos/${id}/thumb`, { method: 'DELETE' }), '刪除雲端縮圖');
+    // Last, so a failed file delete leaves the row pointing at something that
+    // is still there rather than the other way round.
+    await deleteDoc(doc(fs, `users/${uid}/photos/${id}`));
     deleted += 1;
   });
   return deleted;

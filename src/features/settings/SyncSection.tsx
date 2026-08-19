@@ -320,7 +320,8 @@ export function SyncSection() {
     if (!cleanup) return;
     setBusy(true);
     try {
-      const deleted = await deleteCloudPhotos(cleanup.ids);
+      if (!uid) return;
+      const deleted = await deleteCloudPhotos(uid, cleanup.ids);
       setCleanupNote(`已刪除雲端 ${deleted} 張照片。`);
       setCleanup(null);
     } catch (e) {

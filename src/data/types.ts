@@ -80,9 +80,14 @@ export interface Album extends BaseEntity {
   sortOrder: number;
 }
 
+/**
+ * A folder has no cover of its own: `FoldersPage` shows the first photo among
+ * the cards it contains, the same rule groups and members use. A stored
+ * `coverPhotoId` field existed here for a while and was never once assigned,
+ * which only made the cloud cleanup look like it had a case to handle.
+ */
 export interface Folder extends BaseEntity {
   name: string;
-  coverPhotoId?: ID;
   sortOrder: number;
 }
 

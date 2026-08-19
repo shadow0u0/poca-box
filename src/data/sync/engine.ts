@@ -1,7 +1,7 @@
 import type { Firestore } from 'firebase/firestore';
 import { ENTITY_TABLES, db, type EntityTableName } from '../db';
 import type { BaseEntity, ID } from '../types';
-import { getFirebase } from './firebase';
+import { getFirestore } from './firebase';
 import { dedupeTaxonomies } from '../dedupe';
 import {
   SYNC_ENABLED_KEY,
@@ -93,28 +93,9 @@ function tableOf(name: EntityTableName) {
   return db[name] as unknown as import('dexie').Table<BaseEntity, ID>;
 }
 
-let firestorePromise: Promise<Firestore> | null = null;
-
-async function firestore(): Promise<Firestore> {
-  firestorePromise ??= (async () => {
-    const { app } = await getFirebase();
-    const { initializeFirestore, connectFirestoreEmulator } = await import('firebase/firestore');
-    // Rows have optional fields that are genuinely `undefined`; without this
-    // Firestore throws instead of simply omitting them.
-    const fs = initializeFirestore(app, { ignoreUndefinedProperties: true });
-
-    // Automated tests point the app at a local emulator. Guarded on an explicit
-    // global so a production build can never be redirected by accident.
-    const emulator = (globalThis as { __POCABOX_FIRESTORE_EMULATOR__?: string })
-      .__POCABOX_FIRESTORE_EMULATOR__;
-    if (emulator) {
-      const [host, port] = emulator.split(':');
-      connectFirestoreEmulator(fs, host, Number(port));
-    }
-    return fs;
-  })();
-  return firestorePromise;
-}
+// Moved to firebase.ts so photo cleanup can reach Firestore too — it can only
+// be initialised once per app, so it cannot be owned by one module.
+const firestore = getFirestore;
 
 async function readWatermark(key: string): Promise<string> {
   const row = await db.settings.get(key);
@@ -147,6 +128,47 @@ async function push(fs: Firestore, uid: string): Promise<number> {
 
   // Only after everything landed — a partial push must be retried in full.
   await db.settings.put({ key: LAST_PUSHED_KEY, value: startedAt });
+  return sent;
+}
+
+/**
+ * The tables `seedIfNeeded` writes to.
+ *
+ * Small by nature — tens of rows between them — which is what makes sending
+ * them whole an acceptable answer to the watermark problem below.
+ */
+const SEEDED_TABLES: EntityTableName[] = ['sources', 'cardTypes', 'statuses'];
+
+/**
+ * Send every row of the named tables, watermark or not.
+ *
+ * Needed because seeded rows carry a year-2000 timestamp — deliberate, so
+ * seeding loses every merge it takes part in — which also puts them permanently
+ * behind the push watermark. A default added by a later release would otherwise
+ * exist on each device and never in the cloud. Re-sending a handful of rows
+ * costs one batch and is idempotent, so it does not need to be clever.
+ *
+ * The watermark is left alone: this is an extra send, not a checkpoint.
+ */
+async function pushWholeTables(
+  fs: Firestore,
+  uid: string,
+  tables: EntityTableName[],
+): Promise<number> {
+  const { doc, writeBatch } = await import('firebase/firestore');
+
+  let sent = 0;
+  for (const table of tables) {
+    const rows = await tableOf(table).toArray();
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = writeBatch(fs);
+      for (const row of rows.slice(i, i + BATCH_SIZE)) {
+        batch.set(doc(fs, `users/${uid}/${table}/${row.id}`), row);
+      }
+      await batch.commit();
+      sent += Math.min(BATCH_SIZE, rows.length - i);
+    }
+  }
   return sent;
 }
 
@@ -259,10 +281,18 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       // must not be created until we know whether this account already has a
       // set of classifications, or a name the user renamed away would come back
       // as a second entry. Seeding is a no-op once any rows exist.
-      await seedIfNeeded();
+      const seeded = await seedIfNeeded();
 
       const { merged } = await suppressLocalWrites(() => dedupeTaxonomies());
-      const cleaned = merged > 0 ? await push(fs, uid) : 0;
+      // Dedupe stamps its tombstones and repointed cards with the current time,
+      // so the ordinary watermark push picks them up.
+      let cleaned = merged > 0 ? await push(fs, uid) : 0;
+      // Seeding cannot be caught that way. Its rows carry year 2000 — deliberate,
+      // so seeding always loses a merge — which also places them permanently
+      // behind the push watermark, leaving a default added by a later release
+      // stranded on each device. Sending the three tables outright is the fix
+      // and costs nothing: they hold tens of rows, not thousands.
+      if (seeded > 0) cleaned += await pushWholeTables(fs, uid, SEEDED_TABLES);
 
       // Tell the other devices, but only when there was actually something to
       // tell them about — a round that sent nothing must not wake anyone.
@@ -417,6 +447,10 @@ export async function resetSyncState(): Promise<void> {
   await db.settings.delete(LAST_PUSHED_KEY);
   await db.settings.delete(LAST_PULLED_KEY);
   await resetPhotoSyncState();
+  // The status is module state, so it outlives the settings page. Left alone,
+  // an unanswered `account-changed` would still be sitting there and would
+  // flash back into view the moment anyone signed in again.
+  setStatus({ state: 'idle' });
 }
 
 export type AccountChangeChoice = 'replace' | 'merge';

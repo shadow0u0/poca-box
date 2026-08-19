@@ -62,9 +62,18 @@ const DEFAULTS: Record<SeedTable, string[]> = {
 
 type OfferedRecord = Partial<Record<SeedTable, string[]>>;
 
-export async function seedIfNeeded(): Promise<void> {
+/**
+ * Add any starter classifications this install has not been offered yet.
+ *
+ * Returns how many rows it created. Callers need that because a seeded row
+ * carries `SEEDED_AT`, which is older than any push watermark — so a default
+ * introduced by a later release is invisible to the ordinary "send everything
+ * newer than last time" push and would never reach the cloud on its own.
+ */
+export async function seedIfNeeded(): Promise<number> {
   const offered = await repo.settings.get<OfferedRecord>(OFFERED_KEY, {});
   const legacySeeded = (await repo.settings.get<number>(SEED_KEY, 0)) > 0;
+  let created = 0;
 
   await db.transaction('rw', db.sources, db.cardTypes, db.statuses, db.settings, async () => {
     const nextOffered: OfferedRecord = { ...offered };
@@ -108,6 +117,7 @@ export async function seedIfNeeded(): Promise<void> {
           isDeleted: 0,
         }));
         await store.bulkPut(rows);
+        created += rows.length;
       }
 
       nextOffered[table] = [...new Set([...alreadyOffered, ...names])];
@@ -115,6 +125,8 @@ export async function seedIfNeeded(): Promise<void> {
 
     await db.settings.put({ key: OFFERED_KEY, value: nextOffered });
   });
+
+  return created;
 }
 
 /**
