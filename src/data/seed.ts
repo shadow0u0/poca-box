@@ -1,6 +1,6 @@
 import { db } from './db';
 import { repo } from './repo';
-import { nameKey } from '../lib/id';
+import { builtinId, nameKey } from '../lib/id';
 import type { Taxonomy } from './types';
 
 /**
@@ -38,6 +38,15 @@ const DEFAULT_CARD_TYPES = [
 
 const DEFAULT_STATUSES = ['持有中', '待交換', '願望清單', '已出讓'];
 
+/**
+ * The creation time stamped on every seeded default, on every device.
+ *
+ * Deliberately far in the past and identical everywhere: it makes seeding lose
+ * every merge it could take part in, so a default cannot come back to life or
+ * revert a rename just because another device booted for the first time.
+ */
+const SEEDED_AT = '2000-01-01T00:00:00.000Z';
+
 /** Legacy marker from the first release: a plain version number. */
 const SEED_KEY = 'seededVersion';
 /** Names already offered, per table, so deletions are not undone. */
@@ -58,7 +67,6 @@ export async function seedIfNeeded(): Promise<void> {
   const legacySeeded = (await repo.settings.get<number>(SEED_KEY, 0)) > 0;
 
   await db.transaction('rw', db.sources, db.cardTypes, db.statuses, db.settings, async () => {
-    const now = new Date().toISOString();
     const nextOffered: OfferedRecord = { ...offered };
 
     for (const table of Object.keys(DEFAULTS) as SeedTable[]) {
@@ -85,15 +93,21 @@ export async function seedIfNeeded(): Promise<void> {
           -1,
         );
         const rows: Taxonomy[] = missing.map((name, index) => ({
-          id: crypto.randomUUID(),
+          // Derived from the name, so two devices seeding the same default
+          // produce the same row rather than two that sync cannot tell apart.
+          id: builtinId(table, name),
           name,
           sortOrder: highest + 1 + index,
           isBuiltIn: 1,
-          createdAt: now,
-          updatedAt: now,
+          // A fixed timestamp, not `now`. Seeding on a second device must never
+          // win a merge against the copy already in the cloud — otherwise a
+          // rename made on one device would be undone by another device's first
+          // launch. Any real edit carries a present-day timestamp and wins.
+          createdAt: SEEDED_AT,
+          updatedAt: SEEDED_AT,
           isDeleted: 0,
         }));
-        await store.bulkAdd(rows);
+        await store.bulkPut(rows);
       }
 
       nextOffered[table] = [...new Set([...alreadyOffered, ...names])];

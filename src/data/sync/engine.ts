@@ -2,6 +2,9 @@ import type { Firestore } from 'firebase/firestore';
 import { ENTITY_TABLES, db, type EntityTableName } from '../db';
 import type { BaseEntity, ID } from '../types';
 import { getFirebase } from './firebase';
+import { dedupeTaxonomies } from '../dedupe';
+import { SYNC_LAST_PULLED_KEY } from '../hooks';
+import { seedIfNeeded } from '../seed';
 import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
 
 /**
@@ -26,7 +29,7 @@ import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos'
  */
 
 const LAST_PUSHED_KEY = 'syncLastPushedAt';
-const LAST_PULLED_KEY = 'syncLastPulledAt';
+const LAST_PULLED_KEY = SYNC_LAST_PULLED_KEY;
 
 /** Firestore rejects documents larger than 1 MiB; rows are far smaller. */
 const BATCH_SIZE = 400;
@@ -176,7 +179,25 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       const fs = await firestore();
       const pushed = await push(fs, uid);
       const pulled = await pull(fs, uid);
-      const result: SyncResult = { pushed, pulled, finishedAt: new Date().toISOString() };
+
+      // The pull can bring in a second copy of a classification this device
+      // already has — devices used to seed the defaults with their own random
+      // ids. Collapsing them here, then pushing again, means the cleanup and
+      // its tombstones land in the same round instead of a minute later.
+      // Deferred from startup when this device had never pulled: the defaults
+      // must not be created until we know whether this account already has a
+      // set of classifications, or a name the user renamed away would come back
+      // as a second entry. Seeding is a no-op once any rows exist.
+      await seedIfNeeded();
+
+      const { merged } = await dedupeTaxonomies();
+      const cleaned = merged > 0 ? await push(fs, uid) : 0;
+
+      const result: SyncResult = {
+        pushed: pushed + cleaned,
+        pulled,
+        finishedAt: new Date().toISOString(),
+      };
       setStatus({ state: 'idle', last: result });
 
       // Photos run after the text, and their failures stay their own: an

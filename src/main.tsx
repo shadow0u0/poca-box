@@ -5,6 +5,9 @@ import App from './App';
 import { routes } from './routes';
 import { requestPersistentStorage, seedIfNeeded } from './data/seed';
 import { runDataUpgrade } from './data/upgrade';
+import { repo } from './data/repo';
+import { SYNC_ENABLED_KEY, SYNC_LAST_PULLED_KEY } from './data/hooks';
+import { dedupeTaxonomies } from './data/dedupe';
 import './index.css';
 
 // Hash routing keeps deep links working on GitHub Pages, which serves static
@@ -57,7 +60,26 @@ async function bootstrap() {
   }
 
   await exposeSyncForTests();
-  await seedIfNeeded();
+
+  // A device that is signed in but has never pulled is joining a library that
+  // already exists. Seeding it now would create defaults the account may have
+  // renamed or deleted long ago, and those come back as extra entries rather
+  // than merging — the names no longer match anything. The first sync round
+  // seeds instead, by which point `seedIfNeeded` can see the pulled rows and
+  // correctly does nothing. Offline is the exception: sync may not happen for a
+  // while and an empty app helps nobody, so seed and let the dedupe pass tidy
+  // up afterwards.
+  const joiningExistingAccount =
+    (await repo.settings.get(SYNC_ENABLED_KEY, false)) &&
+    !(await repo.settings.get(SYNC_LAST_PULLED_KEY, '')) &&
+    navigator.onLine;
+  if (!joiningExistingAccount) await seedIfNeeded();
+  // Also runs after every sync pull; here it covers a device that is offline,
+  // or signed out, but still carrying duplicates from before the fix.
+  const deduped = await dedupeTaxonomies();
+  if (deduped.merged > 0) {
+    console.info(`合併了 ${deduped.merged} 個重複的分類，${deduped.repointed} 張小卡已改指向保留的那一個`);
+  }
   // Fire-and-forget: a refusal only means the browser may evict data later,
   // which 設定 surfaces as a banner.
   void requestPersistentStorage();

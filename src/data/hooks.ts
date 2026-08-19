@@ -17,6 +17,12 @@ import type {
 
 export const PHOTO_QUALITY_KEY = 'photoQuality';
 export const SYNC_ENABLED_KEY = 'syncEnabled';
+/**
+ * Watermark of the last successful pull. Lives here rather than in the sync
+ * engine because startup needs to read it to decide whether to seed, and must
+ * not drag the engine into the first-paint path to do so.
+ */
+export const SYNC_LAST_PULLED_KEY = 'syncLastPulledAt';
 
 export interface Collections {
   groups: Group[];
