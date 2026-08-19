@@ -106,6 +106,13 @@ standalone 模式）驗證過會失敗：轉址流程走得完，但 `getRedirec
 **永遠不 resolve** —— 視窗有開、帳號也選了，結果卻回不來。實測記錄：10.12.2 與 12.17.1
 在測試頁上都能成功登入，所以 SDK 版本本身不是問題。
 
+**登入狀態撐得過完全關閉 App**（2026-08-19，v1.2.x，iPhone 加入主畫面後從 App 切換器
+整個滑掉再開）。這一項從 Phase 0 掛到現在都寫著「待確認」，現在確認了：
+`browserLocalPersistence` 存在 IndexedDB，和小卡資料同一套儲存，
+`navigator.storage.persist()` 一併保護到。原本準備的備案（改成明確提示重新登入）
+不需要做。同一輪也走完了三台裝置（iPhone／iPad／電腦）的完整驗收：建卡、
+照片縮圖先到再補原圖、改名、刪除，四個方向都傳到了，三台的分類各只有一份。
+
 照片為什麼不用 Firebase Cloud Storage：這個專案啟用 Storage 要求升級到 Blaze（綁信用卡）。
 R2 有 10GB 免費、無流量費，且同樣不會因為超量而產生帳單。Worker 以使用者的 Firebase
 ID token 驗證身分，**uid 只從 token 的 `sub` 取，絕不從網址取**，所以沒有辦法要到別人的照片。

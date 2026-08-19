@@ -1,6 +1,6 @@
 {
   "name": "poca-box",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "\u5c0f\u5361\u6ac3 \u2014 offline-first PWA for organising a K-pop photocard collection",
   "private": true,
   "type": "module",
