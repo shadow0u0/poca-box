@@ -40,6 +40,17 @@ const LAST_PULLED_KEY = SYNC_LAST_PULLED_KEY;
 /** Firestore rejects documents larger than 1 MiB; rows are far smaller. */
 const BATCH_SIZE = 400;
 
+/**
+ * One tiny document every device watches, stamped whenever any of them pushes.
+ *
+ * Listening to the nine collections directly would mean nine initial snapshots
+ * on every launch and nine subscriptions to keep; one document costs a single
+ * read to attach and nothing at all while the library is untouched. The
+ * listener only says *that* something changed — the ordinary pull is still what
+ * fetches and merges it, so there is one path applying remote data, not two.
+ */
+const pulsePath = (uid: string) => `users/${uid}/meta/pulse`;
+
 export interface SyncResult {
   pushed: number;
   pulled: number;
@@ -253,6 +264,13 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       const { merged } = await suppressLocalWrites(() => dedupeTaxonomies());
       const cleaned = merged > 0 ? await push(fs, uid) : 0;
 
+      // Tell the other devices, but only when there was actually something to
+      // tell them about — a round that sent nothing must not wake anyone.
+      if (pushed + cleaned > 0) {
+        const { doc, setDoc } = await import('firebase/firestore');
+        await setDoc(doc(fs, pulsePath(uid)), { at: new Date().toISOString() });
+      }
+
       const result: SyncResult = {
         pushed: pushed + cleaned,
         pulled,
@@ -307,16 +325,54 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
  */
 const LOCAL_WRITE_DEBOUNCE_MS = 1_500;
 
-export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
+/**
+ * Backstop only, now that a listener delivers other devices' changes as they
+ * happen. It used to be the *sole* way to learn about them, at 60 seconds.
+ *
+ * That was expensive in a way that is easy to miss: Firestore bills a minimum
+ * of one read per query even when the query matches nothing, and a round issues
+ * ten. A tab left open all day cost roughly 14,000 reads against a 50,000 free
+ * daily allowance while reporting no changes whatsoever. Every one of those is
+ * now avoided; this fires only to recover from a dropped listener.
+ */
+const BACKSTOP_INTERVAL_MS = 15 * 60_000;
+
+/** Wake on someone else's push. Returns an unsubscribe. */
+async function watchRemoteChanges(uid: string, onChange: () => void): Promise<() => void> {
+  const fs = await firestore();
+  const { doc, onSnapshot } = await import('firebase/firestore');
+  return onSnapshot(
+    doc(fs, pulsePath(uid)),
+    (snap) => {
+      // Skip this device's own stamp echoing back before the server confirms
+      // it; that change is already applied here.
+      if (snap.metadata.hasPendingWrites) return;
+      onChange();
+    },
+    (e) => console.error('remote change listener failed', e),
+  );
+}
+
+export function startAutoSync(uid: string, intervalMs = BACKSTOP_INTERVAL_MS): () => void {
   const run = () => void syncNow(uid);
 
   // An edit on this device syncs within seconds instead of waiting out the
-  // interval. The interval stays as the safety net that catches everything
-  // else: changes made on *other* devices, and anything a missed event dropped.
+  // interval.
   let debounce: ReturnType<typeof setTimeout> | undefined;
   const stopWatching = watchLocalWrites(() => {
     clearTimeout(debounce);
     debounce = setTimeout(run, LOCAL_WRITE_DEBOUNCE_MS);
+  });
+
+  // And an edit on *another* device arrives here as it happens, rather than
+  // whenever this one next got round to asking.
+  let stopListening: (() => void) | undefined;
+  let listenerCancelled = false;
+  void watchRemoteChanges(uid, run).then((off) => {
+    // The subscription is asynchronous; if sync stopped while it was being set
+    // up, tear it down immediately rather than leaking it.
+    if (listenerCancelled) off();
+    else stopListening = off;
   });
 
   run();
@@ -340,6 +396,8 @@ export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
   return () => {
     clearTimeout(debounce);
     stopWatching();
+    listenerCancelled = true;
+    stopListening?.();
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onVisible);
     window.removeEventListener('online', run);
