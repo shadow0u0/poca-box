@@ -1,9 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconWarning } from '../../components/icons';
 import { ConfirmDialog } from '../../components/ui';
 import { SYNC_ENABLED_KEY, useSyncEnabled } from '../../data/hooks';
 import { repo } from '../../data/repo';
-import { SignInError, preloadSignIn, signIn, signOut, useAuth } from '../../data/sync/auth';
+import {
+  SignInError,
+  onSignInTrace,
+  preloadSignIn,
+  signIn,
+  signOut,
+  useAuth,
+} from '../../data/sync/auth';
 import { useSync, usePhotoSyncState } from '../../data/sync/useSync';
 import { resetSyncState, type SyncStatus } from '../../data/sync/engine';
 import { deleteCloudPhotos, planCloudCleanup, type PhotoSyncState } from '../../data/sync/photos';
@@ -124,9 +131,23 @@ export function SyncSection() {
   const [confirmOff, setConfirmOff] = useState(false);
   const [cleanup, setCleanup] = useState<{ ids: string[] } | null>(null);
   const [cleanupNote, setCleanupNote] = useState<string | null>(null);
+  const [trace, setTrace] = useState<string[]>([]);
+  const [showTrace, setShowTrace] = useState(false);
   const uid = auth.status === 'signed-in' ? auth.account.uid : undefined;
   const sync = useSync(uid);
   const photos = usePhotoSyncState();
+
+  useEffect(() => onSignInTrace(setTrace), []);
+
+  // Warm the auth SDK as soon as this section is on screen, the way the probe
+  // page that signs in reliably does it at load. Loading it inside the click
+  // instead leaves initialisation racing the tap that has to open the window.
+  // Only the settings screen does this, so someone who never opens 設定 still
+  // pays nothing for a feature they have not turned on.
+  useEffect(() => {
+    if (enabled === undefined) return;
+    void preloadSignIn().catch(() => {});
+  }, [enabled]);
 
   // `undefined` means the setting is still loading from IndexedDB.
   if (enabled === undefined) return null;
@@ -135,13 +156,16 @@ export function SyncSection() {
     setBusy(true);
     setError(null);
     try {
-      await repo.settings.set(SYNC_ENABLED_KEY, true);
+      // Sign in first, and only record the opt-in once it worked. Writing the
+      // setting first used to flip `enabled`, which sent useAuth off to
+      // initialise Firebase on a second path at the very moment the popup was
+      // opening — and it needed a rollback on failure to avoid leaving sync
+      // half-enabled. Neither is necessary in this order.
       await signIn();
+      await repo.settings.set(SYNC_ENABLED_KEY, true);
     } catch (e) {
-      // Leave sync switched off if the very first sign-in did not complete,
-      // so the section does not sit in a half-enabled state.
-      if (auth.status !== 'signed-in') await repo.settings.set(SYNC_ENABLED_KEY, false);
       setError(e instanceof SignInError ? e.message : '登入失敗，請再試一次。');
+      setShowTrace(true);
     } finally {
       setBusy(false);
     }
@@ -281,6 +305,28 @@ export function SyncSection() {
       <p className="mt-3 text-xs text-muted">
         同步不等於備份 —— 誤刪會同步到每一台裝置。定期匯出備份仍然是唯一能回到某個時間點的方法。
       </p>
+
+      {trace.length > 0 && (
+        <div className="mt-3">
+          <button
+            type="button"
+            className="text-xs text-muted underline"
+            onClick={() => setShowTrace((v) => !v)}
+          >
+            {showTrace ? '收起登入診斷' : '登入診斷'}
+          </button>
+          {showTrace && (
+            <>
+              <pre className="mt-2 overflow-x-auto rounded-xl bg-surface-2 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
+                {trace.join('\n')}
+              </pre>
+              <p className="mt-1 text-xs text-muted">
+                登入如果卡住或失敗，把這一段截圖下來，就能看出停在哪一步。
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         open={cleanup !== null}

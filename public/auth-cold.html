@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>小卡櫃 · 登入流程重現</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; padding: 16px 16px 48px;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #faf9fc; color: #1b1626;
+      }
+      @media (prefers-color-scheme: dark) { body { background: #0f0d16; color: #ece9f3; } }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 0 0 10px; }
+      .sub { color: #6b6480; font-size: 13px; margin: 0 0 18px; }
+      @media (prefers-color-scheme: dark) { .sub { color: #9a92b0; } }
+      .card {
+        background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 14px;
+        box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+      }
+      @media (prefers-color-scheme: dark) { .card { background: #1a1725; box-shadow: none; } }
+      button {
+        display: block; width: 100%; margin-bottom: 10px; padding: 13px 14px;
+        font: inherit; font-weight: 500; border: 0; border-radius: 11px;
+        background: #cbaee8; color: #1b1626;
+      }
+      button.alt { background: transparent; border: 1px solid #cbaee8; color: #7c4fb0; }
+      @media (prefers-color-scheme: dark) { button.alt { color: #cbaee8; } }
+      button:disabled { opacity: .45; }
+      button .why { display: block; font-size: 12px; font-weight: 400; opacity: .75; margin-top: 3px; }
+      pre {
+        margin: 0; padding: 11px; border-radius: 10px; background: #f2eff8;
+        font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+      }
+      @media (prefers-color-scheme: dark) { pre { background: #221d31; } }
+      .warn {
+        padding: 11px; border-radius: 10px; background: #fde8ee; color: #a3123c;
+        font-size: 13px; margin-bottom: 12px;
+      }
+      @media (prefers-color-scheme: dark) { .warn { background: #3a1f2a; color: #ff8fa8; } }
+      .ok { color: #0d7a4f; }
+    </style>
+  </head>
+  <body>
+    <h1>小卡櫃 · 登入流程重現</h1>
+    <p class="sub">
+      這頁不是測「登入能不能用」（那個 auth-probe 已經證明可以），而是測
+      <strong>正式 App 那種初始化順序</strong>會不會卡住。
+    </p>
+
+    <div class="warn">
+      <strong>每測一顆按鈕，請重新整理這一頁再測下一顆。</strong>
+      Google 的 <code>gapi</code> 是整頁共用的，測過一次之後它就已經暖了，
+      後面測的就不是冷啟動，結果會失去意義。
+    </div>
+
+    <div class="card">
+      <h2>1. 執行環境</h2>
+      <pre id="env">偵測中…</pre>
+    </div>
+
+    <div class="card">
+      <h2>2. 測試（本頁只按一顆，然後重新整理）</h2>
+      <button id="cold-full">
+        A · 完整模仿 App
+        <span class="why">冷載入 SDK ＋ 併發的第二次初始化，全部塞在點擊之後</span>
+      </button>
+      <button id="cold-solo">
+        B · 冷啟動，但去掉併發
+        <span class="why">一樣冷載入，但沒有第二條 onAuthStateChanged 在旁邊跑</span>
+      </button>
+      <button id="warm-redirect" class="alt">
+        C · 先暖機（含 getRedirectResult）→ 再登入
+        <span class="why">對照組，跟 auth-probe 一樣。要按兩次：暖機、登入</span>
+      </button>
+      <button id="warm-plain" class="alt">
+        D · 先暖機但不呼叫 getRedirectResult → 再登入
+        <span class="why">單獨檢驗 getRedirectResult 是不是關鍵。也要按兩次</span>
+      </button>
+    </div>
+
+    <div class="card">
+      <h2>3. 結果（請整段截圖給我）</h2>
+      <pre id="log">尚未開始。</pre>
+    </div>
+
+    <script type="module">
+      // Firebase's web config is not a secret; it identifies the project, and the
+      // security rules are what actually protect the data.
+      const firebaseConfig = {
+        apiKey: 'AIzaSyCoy6b1FNjlTq67xccsohCUikFhyFpyYk4',
+        authDomain: 'poca-box.firebaseapp.com',
+        projectId: 'poca-box',
+        storageBucket: 'poca-box.firebasestorage.app',
+        messagingSenderId: '43048402355',
+        appId: '1:43048402355:web:f88d63d4f7ff131c5a5fc6',
+      };
+
+      const SDK = 'https://www.gstatic.com/firebasejs/12.17.1';
+      const WATCHDOG_SECONDS = 75;
+
+      const $ = (id) => document.getElementById(id);
+      const started = performance.now();
+      const lines = [];
+      const log = (msg) => {
+        const at = ((performance.now() - started) / 1000).toFixed(1);
+        lines.push(`+${at.padStart(5)}s  ${msg}`);
+        $('log').textContent = lines.join('\n');
+      };
+
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+      $('env').textContent = [
+        `顯示模式：${standalone ? '✅ standalone（已加入主畫面）' : '⚠️ 瀏覽器分頁（請先加入主畫面再測）'}`,
+        `網址：${location.origin}${location.pathname}`,
+        `Service Worker：${navigator.serviceWorker?.controller ? '有控制這個頁面' : '沒有控制這個頁面'}`,
+        `SDK：12.17.1（App 現在用的版本）`,
+      ].join('\n');
+
+      /**
+       * One button per page load. gapi lives on `window`, so the first test warms
+       * it for every later one — without this guard the second button pressed
+       * would quietly measure a warm start and look like a pass.
+       */
+      let used = false;
+      const claimPage = (label) => {
+        if (used) {
+          log(`⚠️ 這一頁已經測過「${used}」了。請重新整理再測「${label}」，否則不是冷啟動。`);
+          return false;
+        }
+        used = label;
+        for (const b of document.querySelectorAll('button')) {
+          if (!b.dataset.keep) b.disabled = true;
+        }
+        return true;
+      };
+
+      /** The failure being chased never throws — it just never finishes. */
+      const withWatchdog = (promise) =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`超過 ${WATCHDOG_SECONDS} 秒沒有任何回應 —— 卡住了`)),
+              WATCHDOG_SECONDS * 1000,
+            ),
+          ),
+        ]);
+
+      /** Stand-in for repo.settings.set: an IndexedDB write before anything else. */
+      const writeSetting = () =>
+        new Promise((resolve) => {
+          const open = indexedDB.open('auth-cold-probe', 1);
+          open.onupgradeneeded = () => open.result.createObjectStore('kv');
+          open.onsuccess = () => {
+            const db = open.result;
+            const tx = db.transaction('kv', 'readwrite');
+            tx.objectStore('kv').put(Date.now(), 'lastRun');
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+            tx.onerror = () => {
+              db.close();
+              resolve();
+            };
+          };
+          open.onerror = () => resolve();
+        });
+
+      async function loadSdk() {
+        const [app, auth] = await Promise.all([
+          import(`${SDK}/firebase-app.js`),
+          import(`${SDK}/firebase-auth.js`),
+        ]);
+        return { ...app, ...auth };
+      }
+
+      /**
+       * Anything thrown outside a handler would leave the log frozen mid-step,
+       * which reads exactly like the hang this page exists to identify. Every
+       * button runs through here so a real error can never be mistaken for one.
+       */
+      const guard = (fn) => async () => {
+        try {
+          await fn();
+        } catch (e) {
+          log(`❌ 這一步就出錯了（不是卡住）：${e.code ?? ''} ${e.message}`);
+        }
+      };
+
+      async function makeAuth(fb, name) {
+        const auth = fb.getAuth(fb.initializeApp(firebaseConfig, name));
+        await fb
+          .setPersistence(auth, fb.browserLocalPersistence)
+          .catch((e) => log(`setPersistence 失敗：${e.code ?? e.message}`));
+        return auth;
+      }
+
+      async function popup(fb, auth, label) {
+        log(`開始 signInWithPopup（${label}）…`);
+        try {
+          const r = await withWatchdog(fb.signInWithPopup(auth, new fb.GoogleAuthProvider()));
+          log(`✅ 登入成功：${r.user.email}`);
+        } catch (e) {
+          log(`❌ 失敗：${e.code ?? ''} ${e.message}`);
+        }
+      }
+
+      // A — everything the app does, in the app's order, nothing warmed up front.
+      $('cold-full').onclick = guard(async () => {
+        if (!claimPage('A 完整模仿 App')) return;
+        log('A · 完整模仿 App —— 點擊之後才開始做事');
+        await writeSetting();
+        log('已寫入 IndexedDB（模仿 repo.settings.set）');
+        const fb = await loadSdk();
+        log('SDK 冷載入完成');
+        const auth = await makeAuth(fb, 'cold-full');
+        log('initializeApp / getAuth / setPersistence 完成');
+
+        // The app flips a setting first, which makes useAuth initialise Firebase
+        // on a second, parallel path at the same moment. Reproduced here.
+        void (async () => {
+          const auth2 = await makeAuth(fb, 'cold-full-parallel');
+          fb.onAuthStateChanged(auth2, (u) => log(`（併發那條）onAuthStateChanged：${u ? u.email : '未登入'}`));
+          log('（併發那條）第二次初始化完成');
+        })();
+
+        await popup(fb, auth, '冷啟動＋併發');
+      });
+
+      // B — same cold start, without the parallel initialisation.
+      $('cold-solo').onclick = guard(async () => {
+        if (!claimPage('B 冷啟動不併發')) return;
+        log('B · 冷啟動，沒有併發');
+        await writeSetting();
+        const fb = await loadSdk();
+        log('SDK 冷載入完成');
+        const auth = await makeAuth(fb, 'cold-solo');
+        log('initializeApp / getAuth / setPersistence 完成');
+        await popup(fb, auth, '冷啟動、單線');
+      });
+
+      /**
+       * C and D warm up on the first tap and sign in on the second. Warming at
+       * page load instead would light up gapi for A and B as well, which is
+       * exactly what this page has to avoid.
+       */
+      function twoStep(id, label, useRedirectResult) {
+        const button = $(id);
+        button.dataset.keep = '1';
+        let ready = null;
+
+        button.onclick = guard(async () => {
+          if (!ready) {
+            if (!claimPage(label)) return;
+            button.disabled = true;
+            log(`${label} —— 暖機中…`);
+            const fb = await loadSdk();
+            const auth = await makeAuth(fb, id);
+            if (useRedirectResult) {
+              // What auth-probe does at load, and the app never does. It forces
+              // the popup/redirect resolver — and its gapi iframe — to be built
+              // before any sign-in is attempted.
+              try {
+                await fb.getRedirectResult(auth);
+                log('getRedirectResult 完成（resolver 已初始化）');
+              } catch (e) {
+                log(`getRedirectResult 失敗：${e.code ?? e.message}`);
+              }
+            } else {
+              log('（這一組刻意不呼叫 getRedirectResult）');
+            }
+            fb.onAuthStateChanged(auth, (u) => log(`onAuthStateChanged：${u ? u.email : '未登入'}`));
+            ready = { fb, auth };
+            button.disabled = false;
+            button.textContent = '暖機完成 —— 再按一次開始登入';
+            log('✅ 暖機完成，請再按一次那顆按鈕。');
+            return;
+          }
+          button.disabled = true;
+          await popup(ready.fb, ready.auth, label);
+        });
+      }
+
+      twoStep('warm-redirect', 'C 暖機含 getRedirectResult', true);
+      twoStep('warm-plain', 'D 暖機不含 getRedirectResult', false);
+
+      log('頁面已載入，尚未碰觸任何 Firebase。請只按一顆按鈕。');
+    </script>
+  </body>
+</html>

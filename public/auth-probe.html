@@ -190,6 +190,14 @@
         await mod12
           .setPersistence(a12, mod12.browserLocalPersistence)
           .catch((e) => log(`12.x setPersistence 失敗：${e.code ?? e.message}`));
+        // Section 2 previously only ever reflected the 10.x instance, so a
+        // successful 12.x sign-in looked like it had not registered at all.
+        // That was this page lying, not the SDK failing.
+        mod12.onAuthStateChanged(a12, (user) => {
+          if (!user) return;
+          $('status').textContent = `✅ 已登入（12.17.1）\n${user.email}\nuid: ${user.uid}`;
+          $('status').className = 'ok';
+        });
         log('12.17.1 也載入成功，兩個版本都可以測。');
       } else {
         $('popup12').disabled = true;

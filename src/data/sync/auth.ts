@@ -59,6 +59,29 @@ function describe(code: string): string {
 }
 
 /**
+ * A running account of what sign-in is doing, shown in 設定 on request.
+ *
+ * This flow can only be observed on a real iPhone, which is not something this
+ * project can test locally — and its known failure mode produces no error at
+ * all. A timestamped log the user can screenshot turns "it hangs" into a line
+ * number.
+ */
+const traceLines: string[] = [];
+const traceListeners = new Set<(lines: string[]) => void>();
+
+function trace(message: string): void {
+  const at = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+  traceLines.push(`${at}  ${message}`);
+  for (const listener of traceListeners) listener([...traceLines]);
+}
+
+export function onSignInTrace(listener: (lines: string[]) => void): () => void {
+  traceListeners.add(listener);
+  listener([...traceLines]);
+  return () => traceListeners.delete(listener);
+}
+
+/**
  * How long to wait for the popup before giving up.
  *
  * `signInWithPopup` can fail by never settling at all: the window opens, the
@@ -88,21 +111,42 @@ let kit: SignInKit | null = null;
  */
 export async function preloadSignIn(): Promise<void> {
   if (kit) return;
+  trace('暖機開始');
   const { auth } = await getFirebase();
   const mod = await import('firebase/auth');
+  trace('SDK 載入完成');
+
+  // Forces the popup/redirect resolver — and the gapi iframe the popup result
+  // travels back through — to be built now rather than during the sign-in
+  // itself. auth-probe.html does exactly this at load and signs in reliably on
+  // the device where the app hangs; it is the one step the app was missing.
+  // There is never a pending redirect to collect (the app is popup-only), so
+  // the return value is deliberately discarded.
+  try {
+    await mod.getRedirectResult(auth);
+    trace('resolver 初始化完成');
+  } catch (e) {
+    trace(`resolver 初始化失敗：${(e as { code?: string }).code ?? String(e)}`);
+  }
+
   kit = {
     auth,
     signInWithPopup: mod.signInWithPopup,
     GoogleAuthProvider: mod.GoogleAuthProvider,
   };
+  trace('暖機完成，可以登入');
 }
 
 export async function signIn(): Promise<Account> {
   // Slow path only when the preload has not finished — correctness first, even
   // though the awaits here are what can cost the gesture.
-  if (!kit) await preloadSignIn();
+  if (!kit) {
+    trace('尚未暖機，現在才載入（可能來不及在手勢內開視窗）');
+    await preloadSignIn();
+  }
   const ready = kit!;
 
+  trace('開始 signInWithPopup');
   try {
     const result = await Promise.race([
       ready.signInWithPopup(ready.auth, new ready.GoogleAuthProvider()),
@@ -113,10 +157,15 @@ export async function signIn(): Promise<Account> {
         ),
       ),
     ]);
+    trace(`✅ 登入成功：${result.user.email ?? result.user.uid}`);
     return toAccount(result.user);
   } catch (e) {
-    if (e instanceof SignInError) throw e;
+    if (e instanceof SignInError) {
+      trace(`❌ ${e.code}`);
+      throw e;
+    }
     const code = (e as { code?: string }).code ?? 'unknown';
+    trace(`❌ ${code}`);
     throw new SignInError(describe(code), code);
   }
 }
