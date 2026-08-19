@@ -11,8 +11,8 @@ import {
   signOut,
   useAuth,
 } from '../../data/sync/auth';
-import { useSync, usePhotoSyncState } from '../../data/sync/useSync';
-import { resetSyncState, type SyncStatus } from '../../data/sync/engine';
+import { useSyncStatus, usePhotoSyncState } from '../../data/sync/useSync';
+import { resetSyncState, syncNow, type SyncStatus } from '../../data/sync/engine';
 import { deleteCloudPhotos, planCloudCleanup, type PhotoSyncState } from '../../data/sync/photos';
 
 /**
@@ -134,7 +134,9 @@ export function SyncSection() {
   const [trace, setTrace] = useState<string[]>([]);
   const [showTrace, setShowTrace] = useState(false);
   const uid = auth.status === 'signed-in' ? auth.account.uid : undefined;
-  const sync = useSync(uid);
+  // Display only. The loop itself runs in App, so it keeps going after this
+  // screen is closed.
+  const syncStatus = useSyncStatus();
   const photos = usePhotoSyncState();
 
   useEffect(() => onSignInTrace(setTrace), []);
@@ -256,7 +258,12 @@ export function SyncSection() {
             已登入，資料與照片都會自動同步。新裝置會先下載縮圖讓你立刻能翻，
             原圖在背景慢慢補齊。
           </p>
-          <SyncStatusRow status={sync.status} onRetry={sync.syncNow} />
+          <SyncStatusRow
+            status={syncStatus}
+            onRetry={() => {
+              if (uid) void syncNow(uid);
+            }}
+          />
           <PhotoSyncRow state={photos} />
           <div className="mb-3 flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5">
             {auth.account.photoURL ? (

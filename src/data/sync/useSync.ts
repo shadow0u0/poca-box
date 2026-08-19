@@ -1,31 +1,50 @@
 import { useEffect, useState } from 'react';
-import { getSyncStatus, onSyncStatus, startAutoSync, syncNow, type SyncStatus } from './engine';
+import { getSyncStatus, onSyncStatus, startAutoSync, type SyncStatus } from './engine';
 import { getPhotoSyncState, onPhotoSyncState, type PhotoSyncState } from './photos';
+import { useSyncEnabled } from '../hooks';
+import { useAuth } from './auth';
 
 /**
- * Runs background sync for as long as a signed-in account is present, and
- * exposes the current status. Passing `undefined` stops syncing, so signing out
- * tears the loop down.
+ * Drives background sync for as long as someone is signed in.
+ *
+ * Belongs to the app shell, not to a screen. It used to live in the 雲端同步
+ * section of 設定, which meant `startAutoSync`'s interval only existed while
+ * that page was mounted: a card added on the 卡片 page was not pushed until the
+ * user happened to wander back into 設定. The user asked for sync that is
+ * simply automatic, so this has to be mounted for as long as the app is.
+ *
+ * Call it exactly once, from `App`. A second call would start a second interval
+ * — `syncNow` collapses overlapping rounds, so nothing would break, but there
+ * is no reason to run two timers.
  */
-export function useSync(uid: string | undefined): {
-  status: SyncStatus;
-  syncNow: () => void;
-} {
-  const [status, setStatus] = useState<SyncStatus>(getSyncStatus);
+export function useBackgroundSync(): void {
+  const enabled = useSyncEnabled();
+  // `useAuth(false)` touches no Firebase at all, so someone who never turned
+  // sync on still pays nothing for it at startup.
+  const auth = useAuth(enabled === true);
 
-  useEffect(() => onSyncStatus(setStatus), []);
+  // Automated tests drive the engine without a Google account. Only honoured
+  // alongside the emulator global, which a production build never sets, so this
+  // cannot supply a uid to a real user's app.
+  const test = globalThis as {
+    __POCABOX_FIRESTORE_EMULATOR__?: string;
+    __POCABOX_TEST_UID__?: string;
+  };
+  const testUid = test.__POCABOX_FIRESTORE_EMULATOR__ ? test.__POCABOX_TEST_UID__ : undefined;
+
+  const uid = testUid ?? (auth.status === 'signed-in' ? auth.account.uid : undefined);
 
   useEffect(() => {
     if (!uid) return;
     return startAutoSync(uid);
   }, [uid]);
+}
 
-  return {
-    status,
-    syncNow: () => {
-      if (uid) void syncNow(uid);
-    },
-  };
+/** Live sync status for display. Observes only — it drives nothing. */
+export function useSyncStatus(): SyncStatus {
+  const [status, setStatus] = useState<SyncStatus>(getSyncStatus);
+  useEffect(() => onSyncStatus(setStatus), []);
+  return status;
 }
 
 /**

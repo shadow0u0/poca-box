@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useBackgroundSync } from './data/sync/useSync';
 // Imported rather than referenced by path: at 776 bytes it falls under Vite's
 // inline limit and becomes a data URI, so the logo survives any base path —
 // including the single-file build, which has no sibling files at all.
@@ -20,6 +21,9 @@ const NAV = [
 ];
 
 export default function App() {
+  // Mounted for the life of the app, so sync is not tied to being on 設定.
+  useBackgroundSync();
+
   return (
     <div className="min-h-dvh md:flex">
       {/* Tablet / desktop: persistent sidebar */}
