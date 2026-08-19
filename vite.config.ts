@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -17,23 +18,30 @@ const base = process.env.BASE_PATH ?? './';
  * commit and a timestamp on screen turns that into a glance.
  */
 function buildId(): string {
-  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
   try {
-    const sha = execSync('git rev-parse --short HEAD', {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
       .toString()
       .trim();
-    return `${stamp} · ${sha}`;
   } catch {
-    // Building outside a git checkout — the timestamp alone still identifies it.
-    return stamp;
+    // Building outside a git checkout — fall back to something still unique.
+    return new Date().toISOString().slice(0, 16).replace('T', ' ');
   }
 }
 
+/**
+ * Semantic version from package.json, the single place it is edited.
+ *
+ * MAJOR: stored data changes shape in a way older builds cannot read, or the
+ * app is redesigned. MINOR: a new capability. PATCH: fixes only.
+ */
+const appVersion: string = JSON.parse(readFileSync('./package.json', 'utf8')).version;
+
 export default defineConfig({
   base,
-  define: { __BUILD_ID__: JSON.stringify(buildId()) },
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __BUILD_ID__: JSON.stringify(buildId()),
+  },
   plugins: [
     react(),
     VitePWA({

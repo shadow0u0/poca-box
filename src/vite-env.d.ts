@@ -1,4 +1,6 @@
 /// <reference types="vite/client" />
 
-/** Build stamp injected by `define` in vite.config.ts. */
+/** Semantic version from package.json, injected by vite.config.ts. */
+declare const __APP_VERSION__: string;
+/** Short commit of the build, injected by vite.config.ts. */
 declare const __BUILD_ID__: string;

@@ -4,6 +4,7 @@ import type { BaseEntity, ID } from '../types';
 import { getFirebase } from './firebase';
 import { dedupeTaxonomies } from '../dedupe';
 import { SYNC_LAST_PULLED_KEY } from '../hooks';
+import { suppressLocalWrites, watchLocalWrites } from './localWrites';
 import { seedIfNeeded } from '../seed';
 import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
 
@@ -178,7 +179,12 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
     try {
       const fs = await firestore();
       const pushed = await push(fs, uid);
-      const pulled = await pull(fs, uid);
+      // Everything from here writes rows this device did not author, so it must
+      // not read as a local edit. Not a runaway risk — `pull` skips rows that
+      // are not newer, so a second pass writes nothing and the cascade stops by
+      // itself (measured: same number of rounds either way). This just avoids
+      // the redundant round.
+      const pulled = await suppressLocalWrites(() => pull(fs, uid));
 
       // The pull can bring in a second copy of a classification this device
       // already has — devices used to seed the defaults with their own random
@@ -190,7 +196,7 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       // as a second entry. Seeding is a no-op once any rows exist.
       await seedIfNeeded();
 
-      const { merged } = await dedupeTaxonomies();
+      const { merged } = await suppressLocalWrites(() => dedupeTaxonomies());
       const cleaned = merged > 0 ? await push(fs, uid) : 0;
 
       const result: SyncResult = {
@@ -204,7 +210,7 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       // unreachable photo Worker must not make the card data look unsynced when
       // it is safely in Firestore. The photo row in 設定 reports the problem.
       try {
-        await syncPhotos(fs, uid);
+        await suppressLocalWrites(() => syncPhotos(fs, uid));
       } catch (photoError) {
         console.error('photo sync failed', photoError);
         reportPhotoSyncError(photoError);
@@ -244,8 +250,26 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
  * Triggers on start, when the tab becomes visible again, when connectivity
  * returns, and on a slow interval as a backstop. Returns a stop function.
  */
+/**
+ * How long to wait after an edit before pushing it.
+ *
+ * Long enough that saving a card — which writes the card and both photos —
+ * becomes one round rather than three, short enough that walking to another
+ * device is never a race.
+ */
+const LOCAL_WRITE_DEBOUNCE_MS = 1_500;
+
 export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
   const run = () => void syncNow(uid);
+
+  // An edit on this device syncs within seconds instead of waiting out the
+  // interval. The interval stays as the safety net that catches everything
+  // else: changes made on *other* devices, and anything a missed event dropped.
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  const stopWatching = watchLocalWrites(() => {
+    clearTimeout(debounce);
+    debounce = setTimeout(run, LOCAL_WRITE_DEBOUNCE_MS);
+  });
 
   run();
   const timer = setInterval(() => {
@@ -266,6 +290,8 @@ export function startAutoSync(uid: string, intervalMs = 60_000): () => void {
   window.addEventListener('focus', onVisible);
 
   return () => {
+    clearTimeout(debounce);
+    stopWatching();
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onVisible);
     window.removeEventListener('online', run);

@@ -3,6 +3,7 @@ import { db } from '../db';
 import { invalidatePhotoUrl } from '../photos';
 import type { ID, Photo } from '../types';
 import { getIdToken } from './auth';
+import { suppressLocalWrites } from './localWrites';
 
 /**
  * Photo sync: metadata through Firestore, pixels through our own Cloudflare
@@ -389,7 +390,10 @@ let fillInFlight: Promise<void> | null = null;
  */
 export function fillFullImages(): Promise<void> {
   if (fillInFlight) return fillInFlight;
-  const run = runFill();
+  // Filling in a downloaded image deliberately leaves `updatedAt` alone, so
+  // these writes can never be worth pushing — and without this they would
+  // schedule a pointless sync round for every photo that lands.
+  const run = suppressLocalWrites(runFill);
   // Cleared from a callback, never from inside the body: an early return before
   // the first await would otherwise clear the slot before it was even assigned
   // and leave a settled promise parked here for the rest of the session.

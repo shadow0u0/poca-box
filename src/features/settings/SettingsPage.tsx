@@ -471,7 +471,9 @@ export default function SettingsPage() {
       </p>
       {/* Which build is actually running — a service worker can keep serving an
           old one long after a deploy, and nothing else on screen gives it away. */}
-      <p className="mt-1 text-center font-mono text-[11px] text-muted/70">版本 {__BUILD_ID__}</p>
+      <p className="mt-1 text-center font-mono text-[11px] text-muted/70">
+        v{__APP_VERSION__} · {__BUILD_ID__}
+      </p>
     </>
   );
 }
