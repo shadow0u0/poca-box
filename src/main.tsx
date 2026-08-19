@@ -50,6 +50,7 @@ async function exposeSyncForTests() {
       syncNow: engine.syncNow,
       resetSyncState: engine.resetSyncState,
       getSyncStatus: engine.getSyncStatus,
+      describeSyncError: engine.describeSyncError,
       fillFullImages: photoSync.fillFullImages,
       getPhotoSyncState: photoSync.getPhotoSyncState,
       planCloudCleanup: photoSync.planCloudCleanup,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { IconWarning } from '../../components/icons';
 import { ConfirmDialog } from '../../components/ui';
-import { SYNC_ENABLED_KEY, useSyncEnabled } from '../../data/hooks';
+import { SYNC_ENABLED_KEY, SYNC_LAST_OK_KEY, useSyncEnabled } from '../../data/hooks';
 import { repo } from '../../data/repo';
 import {
   SignInError,
@@ -29,13 +29,30 @@ import { deleteCloudPhotos, planCloudCleanup, type PhotoSyncState } from '../../
  * enabled it.
  */
 /** Compact live view of what sync is doing right now. */
+/** Past this long without a successful round, say so instead of looking calm. */
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+function staleness(lastOkAt: string | undefined): string | null {
+  if (!lastOkAt) return null;
+  const age = Date.now() - new Date(lastOkAt).getTime();
+  if (age < STALE_AFTER_MS) return null;
+  const days = Math.floor(age / (24 * 60 * 60 * 1000));
+  return days >= 1 ? `已經 ${days} 天沒有成功同步` : '超過一天沒有成功同步';
+}
+
 function SyncStatusRow({
   status,
+  lastOkAt,
   onRetry,
 }: {
   status: SyncStatus;
+  lastOkAt: string | undefined;
   onRetry: () => void;
 }) {
+  // Catches silent failure whatever the cause — an expired session, an
+  // exhausted quota, a bug none of the named codes cover. Sync can stop for
+  // days without anything on screen looking wrong.
+  const stale = status.state === 'syncing' ? null : staleness(lastOkAt);
   const dot =
     status.state === 'syncing'
       ? 'bg-accent animate-pulse'
@@ -43,7 +60,13 @@ function SyncStatusRow({
         ? 'bg-danger'
         : status.state === 'offline'
           ? 'bg-muted'
-          : 'bg-emerald-500';
+          : stale
+            ? 'bg-amber-500'
+            : 'bg-emerald-500';
+
+  // A persisted timestamp, so reopening the app shows when it last worked
+  // instead of "等待同步" as though it had never run.
+  const syncedAt = (status.state === 'idle' ? status.last?.finishedAt : undefined) ?? lastOkAt;
 
   const label =
     status.state === 'syncing'
@@ -54,20 +77,27 @@ function SyncStatusRow({
           ? status.message
           : status.state === 'account-changed'
             ? '已暫停同步，請先確認下方的選擇'
-            : status.last
-              ? `已同步 · ${formatTime(status.last.finishedAt)}`
+            : syncedAt
+              ? `已同步 · ${formatTime(syncedAt)}`
               : '等待同步';
 
   return (
-    <div className="mb-3 flex items-center gap-2.5 rounded-xl bg-surface-2 px-3 py-2.5">
-      <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
-      <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
-      {/* No retry while the account question is open: syncNow would refuse
-          anyway, and offering it reads as "just press this to fix it". */}
-      {status.state !== 'syncing' && status.state !== 'account-changed' && (
-        <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
-          立即同步
-        </button>
+    <div className="mb-3 rounded-xl bg-surface-2 px-3 py-2.5">
+      <div className="flex items-center gap-2.5">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+        <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+        {/* No retry while the account question is open: syncNow would refuse
+            anyway, and offering it reads as "just press this to fix it". */}
+        {status.state !== 'syncing' && status.state !== 'account-changed' && (
+          <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
+            立即同步
+          </button>
+        )}
+      </div>
+      {stale && status.state !== 'account-changed' && (
+        <p className="mt-1.5 pl-4.5 text-xs text-danger">
+          {stale}。請確認網路與登入狀態，資料仍安全留在這台裝置。
+        </p>
       )}
     </div>
   );
@@ -208,6 +238,7 @@ export function SyncSection() {
   // screen is closed.
   const syncStatus = useSyncStatus();
   const photos = usePhotoSyncState();
+  const lastOkAt = useLiveQuery(() => repo.settings.get<string>(SYNC_LAST_OK_KEY, ''), []);
   // Only read while the account question is open, to say how much is at stake.
   const strandedCards = useLiveQuery(
     () => (syncStatus.state === 'account-changed' ? repo.cards.list() : Promise.resolve(null)),
@@ -347,6 +378,7 @@ export function SyncSection() {
           </p>
           <SyncStatusRow
             status={syncStatus}
+            lastOkAt={lastOkAt}
             onRetry={() => {
               if (uid) void syncNow(uid);
             }}

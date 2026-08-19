@@ -32,6 +32,13 @@ export const SYNC_LAST_PULLED_KEY = 'syncLastPulledAt';
  * unsent. Comparing against this is what turns that into a question.
  */
 export const SYNC_LAST_UID_KEY = 'syncLastUid';
+/**
+ * When a sync round last completed. Persisted rather than kept in memory so it
+ * survives a reload: sync can fail quietly for days — an expired session, an
+ * exhausted quota — and "last synced three days ago" is the one signal that
+ * catches every cause without having to predict them.
+ */
+export const SYNC_LAST_OK_KEY = 'syncLastOkAt';
 
 export interface Collections {
   groups: Group[];

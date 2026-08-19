@@ -3,7 +3,12 @@ import { ENTITY_TABLES, db, type EntityTableName } from '../db';
 import type { BaseEntity, ID } from '../types';
 import { getFirebase } from './firebase';
 import { dedupeTaxonomies } from '../dedupe';
-import { SYNC_ENABLED_KEY, SYNC_LAST_UID_KEY, SYNC_LAST_PULLED_KEY } from '../hooks';
+import {
+  SYNC_ENABLED_KEY,
+  SYNC_LAST_OK_KEY,
+  SYNC_LAST_UID_KEY,
+  SYNC_LAST_PULLED_KEY,
+} from '../hooks';
 import { suppressLocalWrites, watchLocalWrites } from './localWrites';
 import { seedIfNeeded } from '../seed';
 import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
@@ -167,6 +172,32 @@ async function pull(fs: Firestore, uid: string): Promise<number> {
   return applied;
 }
 
+/**
+ * Turn a Firestore failure into something a person can act on.
+ *
+ * Only the codes that can genuinely happen to this app are named. Everything
+ * else keeps the honest generic message rather than a guess: sync retries by
+ * itself, and the staleness warning in 設定 is what stops an unnamed failure
+ * from going unnoticed indefinitely.
+ */
+export function describeSyncError(e: unknown): string {
+  switch ((e as { code?: string }).code) {
+    case 'permission-denied':
+      return '雲端拒絕存取，請確認 Firestore 安全規則已發布。';
+    case 'unauthenticated':
+      return '登入已過期，請到下方重新登入一次。';
+    case 'resource-exhausted':
+      // Firestore's free tier resets daily. Worth saying, because the obvious
+      // reading of a quota error — that something is broken — is wrong.
+      return '今天的雲端免費額度用完了，明天會自動恢復；資料仍安全留在這台裝置。';
+    case 'unavailable':
+    case 'deadline-exceeded':
+      return '連不上雲端，稍後會自動重試。';
+    default:
+      return '同步失敗，稍後會自動重試。';
+  }
+}
+
 let inFlight: Promise<SyncResult | null> | null = null;
 
 /**
@@ -228,6 +259,7 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
         finishedAt: new Date().toISOString(),
       };
       setStatus({ state: 'idle', last: result });
+      await db.settings.put({ key: SYNC_LAST_OK_KEY, value: result.finishedAt });
 
       // Photos run after the text, and their failures stay their own: an
       // unreachable photo Worker must not make the card data look unsynced when
@@ -242,14 +274,7 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
       return result;
     } catch (e) {
       console.error('sync failed', e);
-      const code = (e as { code?: string }).code;
-      setStatus({
-        state: 'error',
-        message:
-          code === 'permission-denied'
-            ? '雲端拒絕存取，請確認 Firestore 安全規則已發布。'
-            : '同步失敗，稍後會自動重試。',
-      });
+      setStatus({ state: 'error', message: describeSyncError(e) });
       return null;
     }
   })();
