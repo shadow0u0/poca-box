@@ -18,6 +18,14 @@ import type {
 export const PHOTO_QUALITY_KEY = 'photoQuality';
 export const SYNC_ENABLED_KEY = 'syncEnabled';
 /**
+ * When a backup zip was last exported.
+ *
+ * Sync is not a backup — a deletion propagates to every device — so the zip
+ * stays the only way back to an earlier point in time. Nobody remembers that on
+ * their own, which is why 設定 counts the days since this and says so.
+ */
+export const LAST_BACKUP_KEY = 'lastBackupAt';
+/**
  * Watermark of the last successful pull. Lives here rather than in the sync
  * engine because startup needs to read it to decide whether to seed, and must
  * not drag the engine into the first-paint path to do so.

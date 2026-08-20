@@ -55,6 +55,14 @@ export const IconGrid = (p: IconProps) => (
   </Icon>
 );
 
+export const IconChart = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 20V4" />
+    <path d="M4 20h16" />
+    <path d="M8 20v-6M13 20V8M18 20v-9" />
+  </Icon>
+);
+
 export const IconSettings = (p: IconProps) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="3" />

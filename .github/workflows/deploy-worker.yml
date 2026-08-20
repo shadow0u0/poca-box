@@ -10,6 +10,10 @@ on:
     branches: [main]
     paths:
       - 'worker/**'
+      # The Worker bundles the allowlist, so adding a friend must redeploy it —
+      # editing only allowlist.json would otherwise leave the photo half of the
+      # gate on yesterday's list.
+      - 'firebase/allowlist.json'
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
 

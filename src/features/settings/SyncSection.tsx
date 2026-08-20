@@ -53,16 +53,17 @@ function SyncStatusRow({
   // exhausted quota, a bug none of the named codes cover. Sync can stop for
   // days without anything on screen looking wrong.
   const stale = status.state === 'syncing' ? null : staleness(lastOkAt);
+  // A lookup rather than another nested ternary: six states deep, the chain was
+  // no longer readable at a glance.
   const dot =
-    status.state === 'syncing'
-      ? 'bg-accent animate-pulse'
-      : status.state === 'error' || status.state === 'account-changed'
-        ? 'bg-danger'
-        : status.state === 'offline'
-          ? 'bg-muted'
-          : stale
-            ? 'bg-amber-500'
-            : 'bg-emerald-500';
+    {
+      syncing: 'bg-accent animate-pulse',
+      error: 'bg-danger',
+      'account-changed': 'bg-danger',
+      'not-invited': 'bg-amber-500',
+      offline: 'bg-muted',
+      idle: stale ? 'bg-amber-500' : 'bg-emerald-500',
+    }[status.state] ?? 'bg-emerald-500';
 
   // A persisted timestamp, so reopening the app shows when it last worked
   // instead of "等待同步" as though it had never run.
@@ -77,24 +78,29 @@ function SyncStatusRow({
           ? status.message
           : status.state === 'account-changed'
             ? '已暫停同步，請先確認下方的選擇'
-            : syncedAt
-              ? `已同步 · ${formatTime(syncedAt)}`
-              : '等待同步';
+            : status.state === 'not-invited'
+              ? '尚未被邀請，暫時不會同步'
+              : syncedAt
+                ? `已同步 · ${formatTime(syncedAt)}`
+                : '等待同步';
 
   return (
     <div className="mb-3 rounded-xl bg-surface-2 px-3 py-2.5">
       <div className="flex items-center gap-2.5">
         <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
         <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
-        {/* No retry while the account question is open: syncNow would refuse
-            anyway, and offering it reads as "just press this to fix it". */}
-        {status.state !== 'syncing' && status.state !== 'account-changed' && (
-          <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
-            立即同步
-          </button>
-        )}
+        {/* No retry while a question is open: syncNow would refuse anyway, and
+            offering it reads as "just press this to fix it" — which it is not,
+            in either case. Being invited is somebody else's action. */}
+        {status.state !== 'syncing' &&
+          status.state !== 'account-changed' &&
+          status.state !== 'not-invited' && (
+            <button type="button" className="btn-ghost btn-sm text-accent" onClick={onRetry}>
+              立即同步
+            </button>
+          )}
       </div>
-      {stale && status.state !== 'account-changed' && (
+      {stale && status.state !== 'account-changed' && status.state !== 'not-invited' && (
         <p className="mt-1.5 pl-4.5 text-xs text-danger">
           {stale}。請確認網路與登入狀態，資料仍安全留在這台裝置。
         </p>
@@ -157,6 +163,60 @@ function AccountChangedPanel({
 
         <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>
           先登出，什麼都不要動
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Signed in, but not on the guest list.
+ *
+ * The whole panel exists to turn a dead end into the next step: the account
+ * code is the one thing whoever runs the space needs, so it is shown large,
+ * selectable, and one tap from the clipboard.
+ */
+function NotInvitedPanel({ uid, busy, onSignOut }: { uid: string; busy: boolean; onSignOut: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(uid);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access can be refused; the code is selectable on screen.
+    }
+  };
+
+  return (
+    <div className="mb-3 rounded-xl border border-accent/40 bg-surface p-3.5">
+      <div className="flex gap-2">
+        <IconWarning className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium">這個帳號還沒有被邀請</p>
+          {/* One line each: JSX collapses a source line break into a space,
+              which is invisible in English and glaring between 漢字. */}
+          <p className="mt-1 text-xs text-muted">
+            這個雲端空間是邀請制的。把下面的帳號代碼傳給空間的管理者，加進去之後就會開始同步。
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            在那之前小卡都好好留在這台裝置上，什麼都不會不見。
+          </p>
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs text-muted">你的帳號代碼</p>
+      <code className="mt-1 block select-all break-all rounded-lg bg-surface-2 px-3 py-2 text-xs">
+        {uid}
+      </code>
+
+      <div className="mt-2 flex gap-2">
+        <button type="button" className="btn-outline" onClick={() => void copy()}>
+          {copied ? '已複製' : '複製代碼'}
+        </button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={onSignOut}>
+          登出
         </button>
       </div>
     </div>
@@ -354,8 +414,15 @@ export function SyncSection() {
 
       {!enabled || auth.status === 'signed-out' ? (
         <>
-          <p className="mt-0.5 mb-3 text-xs text-muted">
-            登入後，小卡資料與照片會同步到你自己的雲端空間，iPhone、iPad 與電腦看到的都一樣。不登入的話，一切維持現狀 —— 資料只留在這台裝置。
+          <p className="mt-0.5 text-xs text-muted">
+            登入後，小卡資料與照片會同步到雲端，iPhone、iPad 與電腦看到的都一樣。不登入的話，一切維持現狀 —— 資料只留在這台裝置。
+          </p>
+          {/* Said before signing in, not after. This is a shared space someone
+              else pays for and administers: other users cannot see your
+              collection, but the person who runs the space can. Whoever is
+              about to hand over their photos is entitled to know that first. */}
+          <p className="mt-2 mb-3 text-xs text-muted">
+            這是<strong>邀請制的共用空間</strong>：其他使用者看不到你的收藏（雲端規則只讓你自己的帳號讀寫），但<strong>空間的管理者在後台看得到</strong>。第一次登入如果還沒被邀請，畫面會給你一組帳號代碼，傳給管理者即可。
           </p>
           <button
             type="button"
@@ -374,9 +441,13 @@ export function SyncSection() {
         <p className="mt-2 text-sm text-muted">讀取登入狀態…</p>
       ) : (
         <>
-          <p className="mt-0.5 mb-3 text-xs text-muted">
-            已登入，資料與照片都會自動同步。新裝置會先下載縮圖讓你立刻能翻，原圖在背景慢慢補齊。
-          </p>
+          {syncStatus.state === 'not-invited' ? (
+            <p className="mt-0.5 mb-3 text-xs text-muted">已登入，但這個帳號還不能使用這個雲端空間。</p>
+          ) : (
+            <p className="mt-0.5 mb-3 text-xs text-muted">
+              已登入，資料與照片都會自動同步。新裝置會先下載縮圖讓你立刻能翻，原圖在背景慢慢補齊。
+            </p>
+          )}
           <SyncStatusRow
             status={syncStatus}
             lastOkAt={lastOkAt}
@@ -384,6 +455,9 @@ export function SyncSection() {
               if (uid) void syncNow(uid);
             }}
           />
+          {syncStatus.state === 'not-invited' && (
+            <NotInvitedPanel uid={syncStatus.uid} busy={busy} onSignOut={() => void stop()} />
+          )}
           {syncStatus.state === 'account-changed' && (
             <AccountChangedPanel
               count={strandedCards?.length}
@@ -393,7 +467,9 @@ export function SyncSection() {
               onCancel={() => void stop()}
             />
           )}
-          <PhotoSyncRow state={photos} />
+          {/* Nothing has been transferred and nothing will be, so "照片已同步"
+              would be a green light on a closed door. */}
+          {syncStatus.state !== 'not-invited' && <PhotoSyncRow state={photos} />}
           <div className="mb-3 flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5">
             {auth.account.photoURL ? (
               <img src={auth.account.photoURL} alt="" className="h-9 w-9 rounded-full" />
@@ -418,14 +494,16 @@ export function SyncSection() {
             >
               登出並關閉同步
             </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              disabled={busy}
-              onClick={() => void findUnused()}
-            >
-              清理雲端未使用的照片
-            </button>
+            {syncStatus.state !== 'not-invited' && (
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => void findUnused()}
+              >
+                清理雲端未使用的照片
+              </button>
+            )}
           </div>
           {cleanupNote && <p className="mt-2 text-xs text-muted">{cleanupNote}</p>}
         </>

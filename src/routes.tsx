@@ -10,6 +10,7 @@ import FolderDetailPage from './features/folders/FolderDetailPage';
 import SetsPage from './features/sets/SetsPage';
 import SetDetailPage from './features/sets/SetDetailPage';
 import SettingsPage from './features/settings/SettingsPage';
+import StatsPage from './features/stats/StatsPage';
 
 export const routes: RouteObject[] = [
   { index: true, element: <CardWallPage /> },
@@ -30,6 +31,7 @@ export const routes: RouteObject[] = [
   { path: 'sets', element: <SetsPage /> },
   { path: 'sets/:setId', element: <SetDetailPage /> },
 
+  { path: 'stats', element: <StatsPage /> },
   { path: 'settings', element: <SettingsPage /> },
 
   { path: '*', element: <Navigate to="/" replace /> },

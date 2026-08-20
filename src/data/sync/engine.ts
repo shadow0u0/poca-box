@@ -11,7 +11,7 @@ import {
 } from '../hooks';
 import { suppressLocalWrites, watchLocalWrites } from './localWrites';
 import { seedIfNeeded } from '../seed';
-import { reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
+import { fetchCloudAccount, reportPhotoSyncError, resetPhotoSyncState, syncPhotos } from './photos';
 
 /**
  * Metadata sync: local IndexedDB ⇄ Firestore, one document per row.
@@ -67,6 +67,12 @@ export type SyncStatus =
    * meant — see `resolveAccountChange`.
    */
   | { state: 'account-changed'; previousUid: string; uid: string }
+  /**
+   * Signed in to Google, but this account is not on the allowlist for this
+   * cloud space. Nothing is sent or fetched; 設定 shows the code to pass on to
+   * whoever runs it.
+   */
+  | { state: 'not-invited'; uid: string }
   | { state: 'error'; message: string };
 
 type Listener = (status: SyncStatus) => void;
@@ -231,6 +237,25 @@ export function describeSyncError(e: unknown): string {
   }
 }
 
+/**
+ * Is this account allowed in? `'yes'`, `'no'`, or `'unknown'`.
+ *
+ * The answer comes from the photo Worker, which holds the same allowlist the
+ * Firestore rules do. When it cannot be reached the answer is `'unknown'` and
+ * sync carries on regardless: the photo service being down must never stop card
+ * data syncing — that separation is deliberate throughout this module — and the
+ * rules are still there to refuse anyone who does not belong.
+ */
+async function checkInvitation(): Promise<'yes' | 'no' | 'unknown'> {
+  try {
+    const account = await fetchCloudAccount();
+    return account.invited ? 'yes' : 'no';
+  } catch (e) {
+    console.warn('could not check invitation, syncing anyway', e);
+    return 'unknown';
+  }
+}
+
 let inFlight: Promise<SyncResult | null> | null = null;
 
 /**
@@ -255,6 +280,18 @@ export function syncNow(uid: string): Promise<SyncResult | null> {
     const previousUid = await readWatermark(SYNC_LAST_UID_KEY);
     if (previousUid && previousUid !== uid) {
       setStatus({ state: 'account-changed', previousUid, uid });
+      return null;
+    }
+
+    // Signing in to Google is not the same as being allowed into this space.
+    // Ask before writing anything: the Firestore rules would refuse a stranger
+    // anyway, but they refuse with `permission-denied`, which also means "the
+    // rules were never published" — guessing between those two would put the
+    // wrong instruction in front of whoever is reading. One question, one
+    // answer, and the panel can show the person the code to send along.
+    const invitation = await checkInvitation();
+    if (invitation === 'no') {
+      setStatus({ state: 'not-invited', uid });
       return null;
     }
 

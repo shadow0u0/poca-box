@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconDownload, IconUpload, IconWarning } from '../../components/icons';
+import { Link } from 'react-router-dom';
+import { IconChart, IconDownload, IconUpload, IconWarning } from '../../components/icons';
 import { ConfirmDialog, Modal, PageHeader, Spinner } from '../../components/ui';
 import {
   clearAllData,
@@ -9,8 +10,17 @@ import {
   type ImportMode,
   type ImportResult,
 } from '../../data/backup';
-import { PHOTO_QUALITY_KEY, useCards, useCollections, usePhotoQuality } from '../../data/hooks';
+import {
+  LAST_BACKUP_KEY,
+  PHOTO_QUALITY_KEY,
+  useCards,
+  useCollections,
+  usePhotoQuality,
+  useSyncEnabled,
+} from '../../data/hooks';
 import { QUALITY_PRESETS, totalPhotoBytes } from '../../data/photos';
+import { fetchCloudAccount, type CloudAccount } from '../../data/sync/photos';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { repo } from '../../data/repo';
 import { requestPersistentStorage } from '../../data/seed';
 import { formatBytes, formatDate } from '../../lib/format';
@@ -26,9 +36,11 @@ import { TaxonomyEditor } from './TaxonomyEditor';
 
 function StorageSection() {
   const cards = useCards();
+  const syncEnabled = useSyncEnabled();
   const [photoBytes, setPhotoBytes] = useState<number | null>(null);
   const [quota, setQuota] = useState<{ usage: number; quota: number } | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [cloud, setCloud] = useState<CloudAccount | null>(null);
 
   useEffect(() => {
     void totalPhotoBytes().then(setPhotoBytes);
@@ -37,6 +49,15 @@ function StorageSection() {
     });
     void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
   }, [cards]);
+
+  useEffect(() => {
+    // Only here, and only while signed in: working the number out means listing
+    // the whole prefix, which is not something a sync round should pay for.
+    if (!syncEnabled) return;
+    void fetchCloudAccount(true)
+      .then(setCloud)
+      .catch(() => setCloud(null));
+  }, [syncEnabled, cards]);
 
   return (
     <section className="card-surface p-4">
@@ -57,6 +78,25 @@ function StorageSection() {
             <dt className="text-xs text-muted">瀏覽器配額</dt>
             <dd>
               已用 {formatBytes(quota.usage)} / 可用 {formatBytes(quota.quota)}
+            </dd>
+          </div>
+        )}
+        {cloud?.invited && cloud.usedBytes != null && (
+          <div className="col-span-2">
+            <dt className="text-xs text-muted">雲端照片空間</dt>
+            <dd>
+              已用 {formatBytes(cloud.usedBytes)} / 上限 {formatBytes(cloud.limitBytes)}
+              <span
+                className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-surface-2"
+                role="presentation"
+              >
+                <span
+                  className={`block h-full rounded-full ${
+                    cloud.usedBytes / cloud.limitBytes > 0.9 ? 'bg-danger' : 'bg-accent'
+                  }`}
+                  style={{ width: `${Math.min(100, (cloud.usedBytes / cloud.limitBytes) * 100)}%` }}
+                />
+              </span>
             </dd>
           </div>
         )}
@@ -87,7 +127,41 @@ function StorageSection() {
   );
 }
 
+/** Past this long without an export, 設定 says so rather than staying quiet. */
+const BACKUP_STALE_DAYS = 30;
+
+/**
+ * How long since the last backup — silent while it is recent, insistent once it
+ * is not, and quiet altogether for a collection with nothing in it yet.
+ */
+function BackupAge({ lastBackupAt, cardCount }: { lastBackupAt: string | null; cardCount: number }) {
+  if (cardCount === 0) return null;
+
+  if (!lastBackupAt) {
+    return (
+      <p className="mt-3 text-sm text-danger">
+        還沒有匯出過備份。同步不等於備份 —— 誤刪會同步到每一台裝置。
+      </p>
+    );
+  }
+
+  const days = Math.floor((Date.now() - new Date(lastBackupAt).getTime()) / (24 * 60 * 60 * 1000));
+  if (days >= BACKUP_STALE_DAYS) {
+    return (
+      <p className="mt-3 text-sm text-danger">
+        已經 {days} 天沒有匯出備份了（上次是 {formatDate(lastBackupAt)}）。
+      </p>
+    );
+  }
+  return <p className="mt-3 text-xs text-muted">上次匯出備份：{formatDate(lastBackupAt)}</p>;
+}
+
 function BackupSection() {
+  const cards = useCards();
+  const lastBackupAt = useLiveQuery(
+    async () => (await repo.settings.get<string>(LAST_BACKUP_KEY, '')) || null,
+    [],
+  );
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -101,6 +175,7 @@ function BackupSection() {
     try {
       const { blob, filename } = await exportBackup();
       downloadBlob(blob, filename);
+      await repo.settings.set(LAST_BACKUP_KEY, new Date().toISOString());
     } catch (e) {
       console.error(e);
       setError('匯出失敗，請再試一次');
@@ -167,6 +242,8 @@ function BackupSection() {
           }
         }}
       />
+
+      <BackupAge lastBackupAt={lastBackupAt ?? null} cardCount={cards?.length ?? 0} />
 
       {error && <p className="mt-3 text-sm text-danger">{error}</p>}
 
@@ -388,7 +465,16 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="設定" subtitle="分類、備份與外觀" />
+      <PageHeader
+        title="設定"
+        subtitle="分類、備份與外觀"
+        actions={
+          <Link to="/stats" className="btn-outline">
+            <IconChart className="h-4 w-4" />
+            收藏統計
+          </Link>
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SyncSection />
@@ -466,8 +552,8 @@ export default function SettingsPage() {
       </div>
 
       <p className="mt-6 text-center text-xs text-muted">
-        小卡櫃 · 未開啟雲端同步時，資料只存在你自己的裝置上。開啟後，文字資料會同步到
-        你自己的 Firebase 專案、照片存放在專屬的雲端空間，兩邊都只有你的帳號讀得到。
+        小卡櫃 · 未開啟雲端同步時，資料只存在這台裝置上。開啟後，文字資料會同步到雲端的
+        Firebase 專案、照片存放在專屬的雲端空間，其他使用者都讀不到，但空間的管理者看得到。
       </p>
       {/* Which build is actually running — a service worker can keep serving an
           old one long after a deploy, and nothing else on screen gives it away. */}

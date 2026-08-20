@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "誰可以使用這個雲端空間。單一來源 —— firestore.rules 的名單區塊與",
+    "worker/src/allowlist.generated.ts 都是從這裡產生的，不要手改那兩個地方。",
+    "",
+    "存的是 Firebase uid，不是 email。uid 只是這個專案內部的不透明識別碼，",
+    "放進公開 repo 沒有問題；把朋友的 email 寫進公開 repo 就是把別人的個資公開。",
+    "",
+    "加人：npm run allowlist:add <uid> \"暱稱\"  → commit（Worker 會自動部署）",
+    "      → 到 Firebase 主控台把 firestore.rules 重新發布一次。",
+    "朋友的 uid 從哪來：他登入之後畫面會顯示「你的帳號代碼」，請他複製給你。",
+    "",
+    "名單是空的代表誰都不能用（包含你自己）。這不是意外，是刻意的預設。"
+  ],
+  "members": []
+}

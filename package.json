@@ -1,6 +1,6 @@
 {
   "name": "poca-box",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "\u5c0f\u5361\u6ac3 \u2014 offline-first PWA for organising a K-pop photocard collection",
   "private": true,
   "type": "module",
@@ -9,7 +9,11 @@
     "build": "tsc --noEmit && vite build",
     "build:single": "BASE_PATH=./ vite build && node scripts/build-single.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "allowlist": "node scripts/allowlist.mjs",
+    "allowlist:add": "node scripts/allowlist.mjs add",
+    "allowlist:remove": "node scripts/allowlist.mjs remove",
+    "allowlist:check": "node scripts/allowlist.mjs check"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",

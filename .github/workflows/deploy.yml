@@ -27,6 +27,13 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # The allowlist is written once in firebase/allowlist.json and copied into
+      # the Firestore rules and the photo Worker. Nothing at runtime would
+      # notice if a generated copy were edited by hand and drifted, so the
+      # build is where that gets caught.
+      - run: npm run allowlist:check
+
       - run: npm run build
 
       # Pages must already be enabled with source "GitHub Actions" in the

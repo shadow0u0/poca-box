@@ -3,10 +3,23 @@ rules_version = '2';
 // Every document lives under users/{uid}/..., and only that signed-in user can
 // touch it. The Firebase web config in the app is public by design, so these
 // rules — not the config — are what keep one person's collection private.
+//
+// Signing in is not the same as being allowed in. Anyone with a Google account
+// can authenticate against this project, so `invited()` below is what decides
+// whose data may exist here at all — otherwise a stranger who finds the URL
+// spends the shared free quota and everyone's sync stops when it runs out.
+// The photo Worker enforces the same list; neither side is enough alone.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // >>> generated from firebase/allowlist.json — do not edit by hand
+    // 名單是空的代表誰都不能用 —— 包含你自己。加人見 firebase/allowlist.json。
+    function invited() {
+      return false;
+    }
+    // <<< generated
+
     match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if invited() && request.auth.uid == userId;
     }
     // Anything outside a user's own subtree is denied, including by a signed-in
     // user. Default-deny rather than relying on no such path existing.

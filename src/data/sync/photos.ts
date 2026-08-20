@@ -2,6 +2,7 @@ import type { Firestore } from 'firebase/firestore';
 import { db } from '../db';
 import { invalidatePhotoUrl } from '../photos';
 import type { ID, Photo } from '../types';
+import { formatBytes } from '../../lib/format';
 import { getIdToken } from './auth';
 import { getFirestore } from './firebase';
 import { suppressLocalWrites } from './localWrites';
@@ -112,7 +113,42 @@ async function api(path: string, init: RequestInit = {}): Promise<Response> {
 
 async function expectOk(res: Response, what: string): Promise<Response> {
   if (res.ok) return res;
+
+  // Two refusals are ordinary situations rather than faults, and saying so
+  // plainly is the difference between "I know what to do" and "something broke".
+  if (res.status === 507) {
+    const body = (await res.json().catch(() => ({}))) as { usedBytes?: number; limitBytes?: number };
+    const detail =
+      body.usedBytes != null && body.limitBytes != null
+        ? `（已用 ${formatBytes(body.usedBytes)} / ${formatBytes(body.limitBytes)}）`
+        : '';
+    throw new Error(`雲端照片空間已滿${detail}，可以刪掉不要的小卡後到設定執行「清理雲端未使用的照片」。`);
+  }
+  if (res.status === 403) {
+    throw new Error('這個帳號還沒有被邀請使用這個雲端空間。');
+  }
   throw new Error(`${what} 失敗（HTTP ${res.status}）`);
+}
+
+export interface CloudAccount {
+  uid: string;
+  invited: boolean;
+  limitBytes: number;
+  /** Only present when asked for — it costs a listing to work out. */
+  usedBytes?: number;
+}
+
+/**
+ * Ask the photo Worker who this token belongs to and whether they are allowed
+ * here.
+ *
+ * Signing in to Google says nothing about being invited to *this* space, and
+ * finding that out from a wall of permission errors is nobody's idea of an
+ * explanation. One authoritative answer, before anything is pushed.
+ */
+export async function fetchCloudAccount(withUsage = false): Promise<CloudAccount> {
+  const res = await expectOk(await api(`/me${withUsage ? '?usage=1' : ''}`), '查詢雲端帳號');
+  return (await res.json()) as CloudAccount;
 }
 
 /** Ids already stored in the cloud, so we only upload what is genuinely missing. */
