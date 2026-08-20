@@ -14,7 +14,9 @@ service cloud.firestore {
     // >>> generated from firebase/allowlist.json — do not edit by hand
     // 名單是空的代表誰都不能用 —— 包含你自己。加人見 firebase/allowlist.json。
     function invited() {
-      return false;
+      return request.auth != null && request.auth.uid in [
+        'nbYqqlHtsufzbPQQuP4FrmpA3vE3' // eason（擁有者）
+      ];
     }
     // <<< generated
 

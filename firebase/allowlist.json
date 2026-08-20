@@ -12,5 +12,10 @@
     "",
     "名單是空的代表誰都不能用（包含你自己）。這不是意外，是刻意的預設。"
   ],
-  "members": []
+  "members": [
+    {
+      "uid": "nbYqqlHtsufzbPQQuP4FrmpA3vE3",
+      "note": "eason（擁有者）"
+    }
+  ]
 }
